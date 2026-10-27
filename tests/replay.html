@@ -6,7 +6,10 @@
 	// Replays recordings from the Mic check page (a .wav plus its .json, with MIDI as the right
 	// answers) through the live detector and scores it. Put the pairs in recordings/ (not committed)
 	// and open tests/replay.html?f=keystage-mic-2026-10-27-10-00,keystage-mic-...
-	import { NoteListener, HOP } from "../js/pitch.js"
+	import { NoteListener, HOP, TUNE } from "../js/pitch.js"
+	// &tune={"floor":10}: try other settings
+	Object.assign(TUNE, JSON.parse(new URLSearchParams(location.search).get("tune") || "{}"))
+	import { transcribe } from "../js/audioimport.js"
 
 	const out = document.getElementById("out")
 	const name = p => ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"][p % 12] + (Math.floor(p / 12) - 1)
@@ -26,13 +29,17 @@
 		return { L, sr: fmt.sr }
 	}
 
+	// &debug=1.2-8: also print every pitch decision between those seconds
+	const dbg = (new URLSearchParams(location.search).get("debug") || "").split("-").map(Number)
 	function run(L, sr) {
 		const nl = new NoteListener(sr)
+		if (dbg.length === 2) nl.debug = []
 		const ev = []
 		for (let i = 0; i + HOP <= L.length; i += HOP) {
 			const ts = ((i + HOP) / sr) * 1000
 			for (const e of nl.push(L.subarray(i, i + HOP), ts)) ev.push({ ...e, t: e.ts / 1000 })
 		}
+		for (const d of nl.debug || []) if (d.ts / 1000 >= dbg[0] && d.ts / 1000 <= dbg[1]) lines.push(`  ${(d.ts / 1000).toFixed(2)} ${name(d.p)} ${d.ok ? "OK " : "no "} s=${d.s} rel=${d.rel} ${d.failed} [${d.peaks.join(" ")}]`)
 		return ev
 	}
 
@@ -62,7 +69,16 @@
 		try {
 			const [wav, info] = await Promise.all([fetch(`../recordings/${f}.wav`).then(r => r.arrayBuffer()), fetch(`../recordings/${f}.json`).then(r => r.json())])
 			const { L, sr } = readWav(wav)
-			const r = score(info.midi, run(L, sr))
+			// No MIDI keyboard on that recording: Basic Pitch's transcription stands in as the answers.
+			let truth = info.midi, ref = "MIDI"
+			if (!truth?.length) {
+				truth = info.basicPitch || (await transcribe([L, L], () => {}, sr)).map(n => ({ type: "on", p: n.p, t: n.t }))
+				ref = "Basic Pitch"
+				fetch("/__result?" + encodeURIComponent("BPNOTES " + f + " " + JSON.stringify(truth.map(n => [n.p, +n.t.toFixed(3)])))).catch(() => {})
+			}
+			const ev = run(L, sr)
+			const r = score(truth, ev)
+			lines.push(`${f}: answers from ${ref}; old detector (in the file) heard ${info.detected.filter(e => e.type === "on").length} notes, the current one ${ev.filter(e => e.type === "on").length}`)
 			tot.keys += r.keys, (tot.found += r.found), (tot.extra += r.extra.length)
 			lines.push(`${f}: found ${r.found}/${r.keys}, ${r.extra.length} extra, timing ${r.med} ms`)
 			lines.push(`  extra by kind: ${JSON.stringify(r.kinds)}`)

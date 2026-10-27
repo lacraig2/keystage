@@ -22,6 +22,10 @@ Then open http://localhost:8642 in Chrome or Edge (they support Web MIDI) and al
 
 The game tells the listener which notes are due, so the song's notes are recognised reliably. Unexpected notes need stronger evidence, and sounds the game plays itself (the other hand, the bass) are ignored. A mic can only guess when a key is let go, so long held notes are judged a little more loosely.
 
+## Smaller keyboards
+
+Tell Keystage which keys you have in **Settings → My keyboard** (pick a size, or press **Detect** and then your lowest and highest keys). Songs that reach past your keyboard say so on the song screen, and their out-of-reach notes move an octave into range when you play. If a song would fit with your keyboard's own octave button, the song screen says so: press it, then Detect again so the game knows.
+
 ## Phones and tablets
 
 - **⛶** goes full screen; on Android it also turns the game sideways. iPhones can't make a web page full screen, so add Keystage to the home screen instead (Share → Add to Home Screen) and open it from there.
@@ -63,6 +67,7 @@ Push this folder to a GitHub repository, then **Settings → Pages → Deploy fr
 | `tests/micdevice.html` | The whole microphone path, using Chrome's fake microphone (flags in the file) |
 | `tests/replay.html` | Replays Mic check recordings (put them in `recordings/`) through the detector and scores it against their MIDI notes |
 | `tests/micdebug.html` | Prints every pitch decision for a few synthesized notes, for tuning the detector |
+| `tests/range.html` | Keyboard range: Detect, the song screen warning, and notes moved into range |
 | `tests/audio.html` | Transcription and beat tracking (`?separate` also runs piano separation) |
 
 `?watch=<songId>` jumps straight to watch mode (for example `?watch=bells`).

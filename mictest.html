@@ -30,7 +30,7 @@
 			</ol>
 			<p><b>Have a MIDI keyboard?</b> Plug it in and play it while recording (its own speakers are fine). Every key you press is saved as the right answer next to the audio, and the page scores the detector for you.</p>
 			<p id="midi" class="hint"></p>
-			<label class="inline"><input type="checkbox" id="echo" /> Filter out computer sound (echo cancellation)</label>
+			<label class="inline"><input type="checkbox" id="echo" /> Filter out computer sound (echo cancellation; leave off on phones, where it muffles the piano)</label>
 			<div class="mic-row">
 				<button id="mic" class="btn primary">Start microphone</button>
 				<button id="rec" class="btn" disabled>Record</button>
@@ -65,7 +65,7 @@
 		try {
 			settings = JSON.parse(localStorage.getItem("keystage.settings") || "{}")
 		} catch {}
-		$("#echo").checked = settings.micEcho ?? false
+		$("#echo").checked = !matchMedia("(pointer: coarse)").matches && (settings.micEcho ?? false)
 
 		const input = new Input()
 		let t0 = performance.now()

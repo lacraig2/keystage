@@ -2,7 +2,7 @@ import { audio } from "./audio.js"
 import { Input } from "./input.js"
 import { Renderer } from "./render.js"
 import { Game } from "./game.js"
-import { SONGS } from "./songs.js"
+import { SONGS, noteName } from "./songs.js"
 import { parseMidi, defaultPlayerParts, songFromMidi } from "./midi.js"
 import { loadRecordingSongs, saveRecording, deleteRecording, loadRecording, readSongPack, addHistory } from "./library.js"
 import { importRecording } from "./audioimport.js"
@@ -44,8 +44,16 @@ const store = {
 	}
 }
 
-const settings = Object.assign({ names: true, fingers: true, echo: false, noteSpeed: 1, offset: 0, micOffset: 0, mic: false, micEcho: true, crowd: !matchMedia("(pointer: coarse)").matches }, store.get("settings", {}))
+const phone = matchMedia("(pointer: coarse)").matches
+// Phones turn echo cancellation into full call processing (gating, stripped overtones) that
+// hides the piano, so it starts off there.
+const settings = Object.assign({ names: true, fingers: true, echo: false, noteSpeed: 1, offset: 0, micOffset: 0, mic: false, micEcho: !phone, crowd: !phone, kbLo: 21, kbHi: 108 }, store.get("settings", {}))
 const saveSettings = () => store.set("settings", settings)
+if (!(settings.v >= 2)) {
+	if (phone) settings.micEcho = false
+	settings.v = 2
+	saveSettings()
+}
 
 const input = new Input()
 const renderer = new Renderer($("#stage"), input, settings)
@@ -53,7 +61,9 @@ let game = null
 let lastConfig = null
 
 // --- Screens --------------------------------------------------------------------------
+let stopDetect = null // while Settings is waiting for the lowest/highest key
 function show(name) {
+	if (name !== "settings") stopDetect?.()
 	$$(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + name))
 	// In a game (no menu showing), offer pause and the Spotlight for touch screens.
 	const playing = !!(name === "none" && game && !game.finished)
@@ -134,7 +144,48 @@ $("#btn-settings").onclick = () => {
 	$("#set-offset").value = Math.round(settings[input.offsetKey])
 	$("#set-micecho").checked = settings.micEcho
 	$("#set-crowd").checked = settings.crowd
+	showKeyboard()
 	show("settings")
+}
+
+const KB_SIZES = [[21, 108], [28, 103], [28, 100], [36, 96], [36, 84], [48, 84]]
+function showKeyboard(msg) {
+	const pick = $("#set-kb")
+	const val = `${settings.kbLo}-${settings.kbHi}`
+	pick.innerHTML = ""
+	const sizes = KB_SIZES.some(([a, b]) => `${a}-${b}` === val) ? KB_SIZES : [...KB_SIZES, [settings.kbLo, settings.kbHi]]
+	for (const [a, b] of sizes) pick.add(new Option(`${b - a + 1} keys: ${keyName(a)} to ${keyName(b)}`, `${a}-${b}`))
+	pick.value = val
+	$("#kb-msg").textContent = msg || "Not sure? Press Detect, then your lowest and highest keys."
+}
+$("#set-kb").onchange = e => {
+	;[settings.kbLo, settings.kbHi] = e.target.value.split("-").map(Number)
+	saveSettings()
+	showKeyboard()
+}
+$("#btn-kb-detect").onclick = () => {
+	if (stopDetect) return stopDetect(), showKeyboard()
+	let first = null
+	const off = input.listen("on", (p, v, ts, src) => {
+		if (src === "mic") return
+		if (first === null) {
+			first = p
+			showKeyboard(`Lowest key: ${keyName(p)}. Now press the highest key.`)
+			return
+		}
+		stopDetect()
+		settings.kbLo = Math.min(first, p)
+		settings.kbHi = Math.max(first, p)
+		saveSettings()
+		showKeyboard(`Got it: a ${kbText()}.`)
+	})
+	stopDetect = () => {
+		off()
+		stopDetect = null
+		$("#btn-kb-detect").textContent = "Detect"
+	}
+	$("#btn-kb-detect").textContent = "Cancel"
+	showKeyboard(input.devices.length ? "Press the lowest key on your keyboard." : "Connect your MIDI keyboard, then press its lowest key.")
 }
 $("#set-names").onchange = e => ((settings.names = e.target.checked), saveSettings())
 $("#set-fingers").onchange = e => ((settings.fingers = e.target.checked), saveSettings())
@@ -222,6 +273,56 @@ function currentSong() {
 	return allSongs().find(s => s.id === sel.song) || SONGS[0]
 }
 
+// --- Keyboard range ------------------------------------------------------------------------
+// Smaller keyboards (61 keys: C2 to C7) can't reach every note of every song. The player says
+// which keys they have (Settings), and notes out of reach move by octaves into range.
+const keyName = p => noteName(p) + (Math.floor(p / 12) - 1)
+const kbText = () => `${settings.kbHi - settings.kbLo + 1}-key keyboard (${keyName(settings.kbLo)} to ${keyName(settings.kbHi)})`
+const mineFor = hands => n => hands === "both" || n.hand === hands
+
+function fitToKeyboard(song, hands) {
+	const lo = settings.kbLo, hi = settings.kbHi
+	const mine = mineFor(hands)
+	if (!song.notes.some(n => mine(n) && (n.p < lo || n.p > hi))) return { song, moved: 0 }
+	const taken = new Set(song.notes.filter(n => mine(n) && n.p >= lo && n.p <= hi).map(n => `${Math.round(n.t * 40)}:${n.p}`))
+	const notes = []
+	let moved = 0
+	for (const n of song.notes) {
+		if (!mine(n) || (n.p >= lo && n.p <= hi)) {
+			notes.push(n)
+			continue
+		}
+		let p = n.p
+		while (p < lo) p += 12
+		while (p > hi) p -= 12
+		if (p < lo) continue // a keyboard smaller than an octave
+		moved++
+		const key = `${Math.round(n.t * 40)}:${p}`
+		if (taken.has(key)) continue // the same key is already played then
+		taken.add(key)
+		notes.push({ ...n, p })
+	}
+	const ps = notes.map(n => n.p)
+	return { song: { ...song, notes, lo: Math.min(...ps), hi: Math.max(...ps) }, moved }
+}
+
+// Does the song fit? If not, would the keyboard's own octave button make it fit?
+function rangeAdvice(song, hands) {
+	const ps = song.notes.filter(mineFor(hands)).map(n => n.p)
+	if (!ps.length) return ""
+	const lo = Math.min(...ps), hi = Math.max(...ps)
+	if (lo >= settings.kbLo && hi <= settings.kbHi) return ""
+	let tip = ""
+	if (hi - lo <= settings.kbHi - settings.kbLo) {
+		const down = lo < settings.kbLo
+		const k = down ? Math.ceil((settings.kbLo - lo) / 12) : Math.ceil((hi - settings.kbHi) / 12)
+		const shift = down ? -12 * k : 12 * k
+		if (lo >= settings.kbLo + shift && hi <= settings.kbHi + shift)
+			tip = ` To play it as written, press your keyboard's octave ${down ? "down" : "up"} button${k > 1 ? ` ${k} times` : ""}, then Detect your keys again in Settings.`
+	}
+	return ` This part goes from ${keyName(lo)} to ${keyName(hi)}, past your ${kbText()}: notes out of reach will move an octave into range.${tip}`
+}
+
 function syncOptions() {
 	const song = currentSong()
 	if (!song.hands.includes(sel.hands) && !(sel.hands === "both" && song.hands.length === 2)) sel.hands = song.hands[0]
@@ -236,7 +337,8 @@ function syncOptions() {
 		(sel.mode === "perform"
 			? "Perform: the band keeps rocking. Hit notes on time to build your combo and win the crowd."
 			: "Practice: the song waits for you at every note. No band, no pressure. Learn where your fingers go.") +
-		(song.hands.length > 1 ? other : "")
+		(song.hands.length > 1 ? other : "") +
+		rangeAdvice(song, sel.hands)
 	store.set("sel", sel)
 }
 
@@ -257,7 +359,7 @@ async function startGame(mode = sel.mode) {
 	audio.ensure()
 	if (game) endGame()
 	lastConfig = { mode, simplified: sel.arr === "simple" }
-	const song = currentSong()
+	const { song, moved } = fitToKeyboard(currentSong(), sel.hands)
 	let recording = null
 	if (song.recording && mode !== "practice") {
 		starting = true
@@ -286,7 +388,8 @@ async function startGame(mode = sel.mode) {
 	renderer.setGame(game)
 	game.start()
 	show("none")
-	if (matchMedia("(pointer: coarse)").matches && innerHeight > innerWidth) toast("Tip: turn your phone sideways for bigger keys.", 4000)
+	if (moved && mode !== "watch") toast(`Moved ${moved} note${moved > 1 ? "s" : ""} an octave to fit your ${kbText()}.`, 4000)
+	else if (matchMedia("(pointer: coarse)").matches && innerHeight > innerWidth) toast("Tip: turn your phone sideways for bigger keys.", 4000)
 }
 
 function endGame() {

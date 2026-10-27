@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage keyboard range test</title>
+<pre id="out">running</pre>
+<iframe id="f" src="../index.html" style="width: 1200px; height: 800px"></iframe>
+<script type="module">
+	// Detect a tiny keyboard (F4 to E5) with the computer keys, then check that the song screen
+	// warns about the range and that starting the song moves notes into range.
+	const log = []
+	const ok = (cond, name) => log.push((cond ? "PASS " : "FAIL ") + name)
+	const wait = ms => new Promise(r => setTimeout(r, ms))
+	const f = document.getElementById("f")
+	await new Promise(r => (f.onload = r))
+	await wait(500)
+	const w = f.contentWindow, d = f.contentDocument, $ = s => d.querySelector(s)
+	const errors = []
+	w.addEventListener("error", e => errors.push(e.message))
+	w.addEventListener("unhandledrejection", e => errors.push(String(e.reason?.stack || e.reason)))
+	const key = (k, type) => w.dispatchEvent(new w.KeyboardEvent(type, { key: k, code: "Key" + k.toUpperCase(), bubbles: true }))
+	const press = async k => (key(k, "keydown"), await wait(50), key(k, "keyup"), await wait(50))
+	try {
+		w.localStorage.removeItem("keystage.settings")
+		$("#btn-settings").click()
+		ok($("#set-kb").value === "21-108", "starts as 88 keys: " + $("#set-kb").value)
+		$("#btn-kb-detect").click()
+		await press("f") // F4
+		await press(";") // E5
+		ok($("#set-kb").value === "65-76", "detected F4 to E5: " + $("#set-kb").value + " / " + $("#kb-msg").textContent)
+		$("#screen-settings [data-goto=title]").click()
+		$("#btn-play")?.click()
+		await wait(300)
+		const desc = $("#mode-desc").textContent
+		ok(/past your [0-9]+-key keyboard/.test(desc), "song screen warns: " + desc.slice(desc.indexOf("This part")))
+		$("#btn-start").click()
+		await wait(300)
+		const t = $("#toast")
+		ok(!t.hidden && /Moved \d+ notes? an octave/.test(t.textContent), "start moves notes: " + t.textContent)
+		ok(!errors.length, "no errors: " + errors.join(" | "))
+		w.localStorage.removeItem("keystage.settings")
+	} catch (e) {
+		ok(false, "threw: " + (e.stack || e.message))
+	}
+	document.getElementById("out").textContent = log.join("\n")
+	fetch("/__result?" + encodeURIComponent(log.join(" || "))).catch(() => {})
+</script>

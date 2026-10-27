@@ -11,6 +11,7 @@
 // 4. Releases: a note counts as held until its harmonics fade or drop sharply (the damper).
 
 export const HOP = 512
+export const TUNE = { floor: 10 }
 const N_FLUX = 2048
 const N_PITCH = 4096
 const LO = 21, HI = 108 // A0..C8
@@ -309,9 +310,12 @@ export class NoteListener {
 			const fundamental = q => peaks.slice(0, Math.min(3, Math.ceil(250 / hz(q)))).reduce((a, b) => a + b, 0)
 			// Striking a key that's still ringing (pedal down) barely raises its fundamental.
 			const restrike = isExpected && this.held.has(best)
-			// A real note shows up across its first few partials, not in one or two stray places.
-			const low = peaks.slice(0, Math.min(4, hs.length))
-			const spread = low.filter(v => v >= 0.15 * top).length >= Math.min(2, low.length)
+			// A real note's energy sits mostly in its first few partials (high notes can be almost
+			// pure tones), not scattered over high partials that other notes happen to line up with.
+			let lowSum = 0, highSum = 0
+			hs.forEach((x, i) => (i < 4 ? (lowSum += peaks[i]) : (highSum += peaks[i])))
+			const nLow = Math.min(4, hs.length), nHigh = hs.length - nLow
+			const spread = !nHigh || lowSum / nLow >= (0.5 * highSum) / nHigh
 			// Most of an unexpected note's evidence must be its own: a note whose partials all sit on
 			// partials of notes already found (an octave up, an octave and a fifth...) is just overtones.
 			let own = 0
@@ -320,7 +324,7 @@ export class NoteListener {
 			})
 			// Deep bass is hard to resolve, so an unexpected low note needs much stronger evidence.
 			const deep = !isExpected && best < 41
-			const floor = (noise * Math.sqrt(hs.length) * (isExpected ? 4 : deep ? 12 : 7)) / this.sensitivity
+			const floor = (noise * Math.sqrt(hs.length) * (isExpected ? 4 : deep ? 16 : TUNE.floor)) / this.sensitivity
 			const checks = {
 				floor: bestS > floor && bestS > 1e-3 / this.sensitivity,
 				rel: !first || bestS / first > (isExpected ? 0.15 : deep ? 0.6 : 0.3),
@@ -334,6 +338,8 @@ export class NoteListener {
 				odd: odd > (isExpected ? 0.25 : 0.5) * even,
 				heard: isExpected || !heard.some(q => q === best || Math.abs(q - best) === 12),
 				own: isExpected || own >= 0.4 * bestS,
+				// A knock or bump lights up a run of neighbouring keys; real unexpected seconds are rare.
+				apart: isExpected || !found.some(f => Math.abs(f.p - best) <= 2),
 			}
 			const ok = Object.values(checks).every(Boolean)
 			this.debug?.push({ ts, p: best, s: +(bestS / Math.max(floor, 1e-9)).toFixed(2), rel: first ? +(bestS / first).toFixed(2) : 1, ok, failed: Object.keys(checks).filter(k => !checks[k]).join(","), peaks: [...peaks.slice(0, hs.length)].map(v => +(v / (top || 1)).toFixed(2)) })
