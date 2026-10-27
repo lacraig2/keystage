@@ -44,7 +44,7 @@ const store = {
 	}
 }
 
-const settings = Object.assign({ names: true, fingers: true, echo: false, noteSpeed: 1, offset: 0, micOffset: 0, mic: false, micEcho: true }, store.get("settings", {}))
+const settings = Object.assign({ names: true, fingers: true, echo: false, noteSpeed: 1, offset: 0, micOffset: 0, mic: false, micEcho: true, crowd: !matchMedia("(pointer: coarse)").matches }, store.get("settings", {}))
 const saveSettings = () => store.set("settings", settings)
 
 const input = new Input()
@@ -133,10 +133,12 @@ $("#btn-settings").onclick = () => {
 	$("#set-notespeed").value = settings.noteSpeed
 	$("#set-offset").value = Math.round(settings[input.offsetKey])
 	$("#set-micecho").checked = settings.micEcho
+	$("#set-crowd").checked = settings.crowd
 	show("settings")
 }
 $("#set-names").onchange = e => ((settings.names = e.target.checked), saveSettings())
 $("#set-fingers").onchange = e => ((settings.fingers = e.target.checked), saveSettings())
+$("#set-crowd").onchange = e => ((settings.crowd = e.target.checked), saveSettings())
 $("#set-echo").onchange = e => ((settings.echo = e.target.checked), saveSettings())
 $("#set-notespeed").oninput = e => ((settings.noteSpeed = +e.target.value), saveSettings())
 $("#set-offset").onchange = e => ((settings[input.offsetKey] = +e.target.value || 0), saveSettings())

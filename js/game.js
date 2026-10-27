@@ -111,7 +111,8 @@ export class Game {
 	start() {
 		audio.ensure()
 		audio.newRun()
-		audio.startCrowd()
+		// The crowd murmur is filtered noise: it would drown the mic, and on phone speakers it sounds like a fan
+		if (this.settings.crowd && !this.input.micOn) audio.startCrowd()
 		audio.setBandBoost(false)
 		const lead = -Math.max(this.song.intro, this.song.barSec)
 		this.begin(lead)
