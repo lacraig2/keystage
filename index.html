@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Keystage</title>
+	<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+	<canvas id="stage"></canvas>
+
+	<!-- Title -->
+	<section id="screen-title" class="screen active">
+		<div class="panel title-panel">
+			<h1 class="logo">KEY<span>STAGE</span></h1>
+			<p class="tagline">Your first gig starts now.</p>
+			<div id="midi-status" class="pill">Looking for MIDI devices…</div>
+			<div id="mic-row" class="mic-row">
+				<button id="btn-mic" class="btn small">🎤 No MIDI? Use a microphone</button>
+				<div id="mic-meter" class="mic-meter" hidden><div></div></div>
+				<span id="mic-heard" class="mic-heard"></span>
+			</div>
+			<div class="btn-row">
+				<button id="btn-play" class="btn primary">Play</button>
+				<button id="btn-calibrate" class="btn">Calibrate</button>
+				<button id="btn-settings" class="btn">Settings</button>
+			</div>
+			<p class="hint">The microphone works with any acoustic or digital piano: put the computer near it, play a few notes, and check they show up here.<br />No piano? Use your computer keyboard: <kbd>A W S E D F T G Y H U J K</kbd> = C to C, <kbd>Z</kbd>/<kbd>X</kbd> shift octave, <kbd>Space</kbd> = Spotlight.</p>
+		</div>
+	</section>
+
+	<!-- Settings -->
+	<section id="screen-settings" class="screen">
+		<div class="panel">
+			<h2>Settings</h2>
+			<label class="row"><span>Show note names on notes</span><input type="checkbox" id="set-names" /></label>
+			<label class="row"><span>Show hand &amp; finger hints (R3 = right hand, finger 3)</span><input type="checkbox" id="set-fingers" /></label>
+			<label class="row"><span>Play my notes through the game<br /><small>Turn on if your piano has no speakers or you use headphones on the computer</small></span><input type="checkbox" id="set-echo" /></label>
+			<label class="row"><span>Note speed</span><input type="range" id="set-notespeed" min="0.6" max="1.8" step="0.1" /></label>
+			<label class="row"><span>Input offset (ms)<br /><small>Set automatically by Calibrate (kept separately for MIDI and the microphone)</small></span><input type="number" id="set-offset" step="1" /></label>
+			<label class="row"><span>Microphone: filter out the game's own sound<br /><small>Leave on with speakers. Turn off if you wear headphones; the mic then hears your piano more clearly.</small></span><input type="checkbox" id="set-micecho" /></label>
+			<div class="btn-row"><button class="btn primary" data-goto="title">Done</button></div>
+		</div>
+	</section>
+
+	<!-- Song select -->
+	<section id="screen-songs" class="screen">
+		<div class="panel wide">
+			<h2>Setlist</h2>
+			<div class="seg genre" id="opt-genre">
+				<button data-v="all" class="on">All</button>
+				<button data-v="starter">Starter</button>
+				<button data-v="rock">Rock</button>
+				<button data-v="christmas">Christmas</button>
+				<button data-v="classical">Classical</button>
+				<button data-v="mine">My songs</button>
+			</div>
+			<div id="song-list" class="song-list"></div>
+			<div class="import-bar">
+				<button id="btn-find" class="btn small primary">🔎 Find songs</button>
+				<button id="btn-import-file" class="btn small">+ Import file</button>
+				<input type="file" id="import-file" accept=".mid,.midi,audio/midi,.keystage,audio/*,.mp3,.m4a,.wav,.flac,.ogg" hidden />
+				<input type="url" id="import-url" placeholder="…or paste a link to a .mid file or a page that has one" />
+				<button id="btn-import-url" class="btn small">Fetch</button>
+			</div>
+			<p id="import-msg" class="hint"></p>
+			<div class="options">
+				<div class="opt-group"><span class="opt-label">Notes</span>
+					<div class="seg" id="opt-arr">
+						<button data-v="full" class="on">Full</button>
+						<button data-v="simple">Simplified</button>
+					</div>
+				</div>
+			</div>
+			<div class="options">
+				<div class="opt-group"><span class="opt-label">Mode</span>
+					<div class="seg" id="opt-mode">
+						<button data-v="perform" class="on">Perform</button>
+						<button data-v="practice">Practice</button>
+					</div>
+				</div>
+				<div class="opt-group"><span class="opt-label">Hands</span>
+					<div class="seg" id="opt-hands">
+						<button data-v="R" class="on">Right</button>
+						<button data-v="L">Left</button>
+						<button data-v="both">Both</button>
+					</div>
+				</div>
+				<div class="opt-group"><span class="opt-label">Speed</span>
+					<div class="seg" id="opt-speed">
+						<button data-v="0.5">50%</button>
+						<button data-v="0.7">70%</button>
+						<button data-v="0.85">85%</button>
+						<button data-v="1" class="on">100%</button>
+					</div>
+				</div>
+			</div>
+			<p id="mode-desc" class="hint"></p>
+			<div class="btn-row">
+				<button class="btn" data-goto="title">Back</button>
+				<button id="btn-watch" class="btn">Watch it first</button>
+				<button id="btn-start" class="btn primary">Start</button>
+			</div>
+		</div>
+	</section>
+
+	<!-- Import: pick links / parts -->
+	<section id="screen-import" class="screen overlay">
+		<div class="panel">
+			<h2 id="imp-title">Import</h2>
+			<div id="imp-links" class="pick-list"></div>
+			<div id="imp-parts-wrap">
+				<label class="row"><span>Song title</span><input type="text" id="imp-name" /></label>
+				<p class="hint">Pick the part <b>you</b> play (one or two). Everything else becomes your backing band. With one part, the game works out which notes belong to which hand.</p>
+				<div id="imp-parts" class="pick-list"></div>
+			</div>
+			<div class="btn-row">
+				<button class="btn" id="btn-imp-cancel">Cancel</button>
+				<button class="btn primary" id="btn-imp-save">Add to setlist</button>
+			</div>
+		</div>
+	</section>
+
+	<!-- Import a recording: separate the piano, transcribe it, keep the band -->
+	<section id="screen-recording" class="screen overlay">
+		<div class="panel">
+			<h2>Play along with a recording</h2>
+			<p class="hint" id="rec-file"></p>
+			<div id="rec-form">
+				<label class="row"><span>Song title</span><input type="text" id="rec-title" /></label>
+				<label class="row"><span>Artist</span><input type="text" id="rec-artist" placeholder="optional" /></label>
+				<label class="row"><span>It's solo piano (no band)</span><input type="checkbox" id="rec-solo" /></label>
+				<p class="hint">Keystage pulls the piano out of the song, writes down its notes for you to play, and keeps everything else as your band. It all happens on this computer: nothing is uploaded. The first time, it downloads about 300 MB of AI models (kept for next time), and a song takes a few minutes. Songs where the piano is loud and clear work best.</p>
+			</div>
+			<div id="rec-progress" style="display:none">
+				<div class="bar"><div id="rec-bar"></div></div>
+				<p class="hint" id="rec-msg"></p>
+			</div>
+			<div class="btn-row">
+				<button class="btn" id="btn-rec-cancel">Cancel</button>
+				<button class="btn primary" id="btn-rec-go">Make it playable</button>
+			</div>
+		</div>
+	</section>
+
+	<!-- Find songs: search other sites, then drop the downloaded file in -->
+	<section id="screen-find" class="screen overlay">
+		<div class="panel">
+			<h2>Find songs</h2>
+			<label class="row"><span>Song</span><input type="text" id="find-q" placeholder="e.g. River Flows in You, Clocks, Hedwig's Theme" /></label>
+			<div id="find-sources" class="pick-list"></div>
+			<p class="hint">All free, no account needed. Download the <b>.mid</b> file, then drop it onto Keystage (or use <b>+ Import file</b>). Arrangements with "piano" or "easy" in the name usually play best.</p>
+			<div class="btn-row">
+				<button class="btn" data-goto="songs">Done</button>
+			</div>
+		</div>
+	</section>
+
+	<div id="drop-hint" class="drop-hint">Drop MIDI files, recordings or Keystage song packs to add them to your setlist</div>
+
+	<!-- Calibrate -->
+	<section id="screen-calibrate" class="screen">
+		<div class="panel">
+			<h2>Calibrate timing</h2>
+			<p>You'll hear 16 clicks. Tap <b>any piano key</b> exactly on each click. Listen, don't watch.</p>
+			<p id="cal-mic" class="hint" hidden>Using the microphone: wear headphones for this so it hears only your piano, not the clicks.</p>
+			<div id="cal-pulse" class="cal-pulse"></div>
+			<p id="cal-result" class="big"></p>
+			<div class="btn-row">
+				<button class="btn" data-goto="title">Back</button>
+				<button id="btn-cal-start" class="btn primary">Start</button>
+			</div>
+		</div>
+	</section>
+
+	<!-- Pause -->
+	<section id="screen-pause" class="screen overlay">
+		<div class="panel">
+			<h2>Paused</h2>
+			<div class="btn-row vertical">
+				<button id="btn-resume" class="btn primary">Resume</button>
+				<button id="btn-restart" class="btn">Restart</button>
+				<button id="btn-quit" class="btn">Quit to setlist</button>
+			</div>
+		</div>
+	</section>
+
+	<!-- Results -->
+	<section id="screen-results" class="screen overlay">
+		<div class="panel">
+			<h2 id="res-title">Encore!</h2>
+			<div id="res-stars" class="stars"></div>
+			<div id="res-score" class="res-score"></div>
+			<div id="res-best" class="best-badge">NEW PERSONAL BEST</div>
+			<div id="res-grid" class="res-grid"></div>
+			<p id="res-tip" class="tip"></p>
+			<div class="btn-row">
+				<button class="btn" id="btn-res-songs">Setlist</button>
+				<button class="btn primary" id="btn-res-retry">Play again</button>
+			</div>
+		</div>
+	</section>
+
+	<script type="module" src="js/main.js"></script>
+</body>
+</html>

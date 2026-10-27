@@ -1,0 +1,157 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage microphone tests</title>
+<pre id="out">running</pre>
+<script type="module">
+	import { NoteListener, HOP } from "../js/pitch.js"
+
+	const log = []
+	const out = document.getElementById("out")
+	const ok = (cond, name) => log.push((cond ? "PASS " : "FAIL ") + name)
+	const SR = 48000
+	const hz = p => 440 * Math.pow(2, (p - 69) / 12)
+
+	// Rough acoustic piano: stiff-string partials that fade faster the higher they are,
+	// a weak fundamental in the bass, a hammer thump, and the damper cutting the note off.
+	let seed = 1
+	const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1
+	function piano(notes, seconds, { noise = 0, pedal = false } = {}) {
+		const L = new Float32Array(SR * seconds)
+		for (const { t, d, p, v = 0.7 } of notes) {
+			const f0 = hz(p), B = p < 60 ? 0.0003 : 0.0003 * Math.pow(2, (p - 60) / 12)
+			const s0 = Math.round(t * SR)
+			// Striking a key again stops the string's old vibration.
+			const again = notes.find(m => m.p === p && m.t > t)
+			const rel = Math.min(pedal ? 3 : d, again ? again.t - t : Infinity)
+			const n = Math.round((rel + 0.25) * SR)
+			const parts = []
+			for (let h = 1; h <= 16; h++) {
+				const f = h * f0 * Math.sqrt(1 + B * h * h)
+				if (f > SR / 2.2) break
+				let a = 1 / Math.pow(h, 1.1)
+				if (p < 48 && h === 1) a *= 0.25 // small speakers/mics and bass strings: weak fundamental
+				if (h === 8) a *= 0.2 // hammer strikes near 1/8 of the string
+				parts.push({ w: 2 * Math.PI * f, a, decay: 0.6 + h * 0.5 + (p - 40) * 0.03, ph: rnd() * 3 })
+			}
+			for (let i = 0; i < n && s0 + i < L.length; i++) {
+				const tt = i / SR
+				const damp = tt < rel ? 1 : Math.exp(-(tt - rel) * (again && tt >= again.t - t ? 400 : 30))
+				let s = 0
+				for (const q of parts) s += q.a * Math.exp(-tt * q.decay) * Math.sin(q.w * tt + q.ph)
+				const thump = tt < 0.01 ? rnd() * 0.3 * (1 - tt / 0.01) : 0
+				L[s0 + i] += 0.08 * v * (Math.min(1, tt / 0.002) * s * damp + thump)
+			}
+		}
+		if (noise) for (let i = 0; i < L.length; i++) L[i] += noise * rnd()
+		return L
+	}
+
+	function listen(audio, { expect = () => [], heard = [] } = {}) {
+		const nl = new NoteListener(SR)
+		nl.expect = ts => expect(ts / 1000)
+		nl.heard = heard.map(h => ({ p: h.p, ts: h.t * 1000 }))
+		const ev = []
+		for (let i = 0; i + HOP <= audio.length; i += HOP) {
+			const ts = ((i + HOP) / SR) * 1000
+			for (const e of nl.push(audio.subarray(i, i + HOP), ts)) ev.push({ ...e, t: e.ts / 1000 })
+		}
+		return ev
+	}
+
+	// Compare detected note-ons with the notes played.
+	function score(notes, ev) {
+		const ons = ev.filter(e => e.type === "on")
+		const used = new Set()
+		const errs = []
+		let hit = 0
+		for (const n of notes) {
+			const m = ons.find((e, i) => !used.has(i) && e.p === n.p && Math.abs(e.t - n.t) < 0.12 && used.add(i))
+			if (m) {
+				hit++
+				errs.push((m.t - n.t) * 1000)
+			}
+		}
+		const extra = ons.filter((e, i) => !used.has(i))
+		errs.sort((a, b) => a - b)
+		const med = errs.length ? errs[Math.floor(errs.length / 2)] : NaN
+		return { hit, extra, med, errs, spread: errs.length ? errs[errs.length - 1] - errs[0] : 0 }
+	}
+	const name = p => ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"][p % 12] + (Math.floor(p / 12) - 1)
+	const describe = (r, n) => `${r.hit}/${n} found, ${r.extra.length} extra${r.extra.length ? " (" + r.extra.map(e => name(e.p) + "@" + e.t.toFixed(2)).join(" ") + ")" : ""}, timing ${Math.round(r.med)} ms ±${Math.round(r.spread / 2)}${Math.abs(r.med) > 20 ? " [" + r.errs.map(Math.round).join(",") + "]" : ""}`
+
+	const due = notes => t => notes.filter(n => Math.abs(n.t - t) < 0.2).map(n => n.p)
+	const seq = (ps, start, step, dur = step * 0.9) => ps.map((p, i) => ({ t: start + i * step, d: dur, p }))
+	const all = []
+	try {
+		// 1. a C major scale up and down, 120 BPM eighths
+		const scale = seq([60, 62, 64, 65, 67, 69, 71, 72, 71, 69, 67, 65, 64, 62, 60], 0.5, 0.25)
+		let r = score(scale, listen(piano(scale, 5)))
+		all.push(r)
+		ok(r.hit >= 14 && r.extra.length <= 1, "scale, song unknown: " + describe(r, scale.length))
+
+		// 2. right hand melody over left hand roots, with chords
+		const both = [...seq([64, 64, 65, 67, 67, 65, 64, 62], 0.5, 0.5), ...seq([48, 43, 48, 43], 0.5, 1, 0.95)]
+		r = score(both, listen(piano(both, 5), { expect: due(both) }))
+		all.push(r)
+		ok(r.hit >= both.length - 1 && r.extra.length <= 1, "melody + bass (as in a song): " + describe(r, both.length))
+
+		const triads = [[60, 64, 67], [65, 69, 72], [67, 71, 74], [60, 64, 67]].flatMap((c, i) => c.map(p => ({ t: 0.5 + i * 0.8, d: 0.7, p })))
+		r = score(triads, listen(piano(triads, 4), { expect: due(triads) }))
+		all.push(r)
+		ok(r.hit >= triads.length - 2 && r.extra.length <= 2, "triads (as in a song): " + describe(r, triads.length))
+
+		// 3. low notes (where beginner left hands live)
+		const low = seq([41, 43, 45, 47, 48, 50, 52], 0.5, 0.4)
+		r = score(low, listen(piano(low, 4)))
+		all.push(r)
+		ok(r.hit >= 6 && r.extra.length <= 1, "low F2..E3: " + describe(r, low.length))
+
+		// 4. high notes
+		const high = seq([72, 76, 79, 84, 88, 91, 96], 0.5, 0.3)
+		r = score(high, listen(piano(high, 3.5)))
+		all.push(r)
+		ok(r.hit >= 6 && r.extra.length <= 1, "high C5..C7: " + describe(r, high.length))
+
+		// 5. repeated notes and sustain pedal
+		const rep = seq([67, 67, 67, 67, 64, 64, 64, 64], 0.5, 0.3)
+		r = score(rep, listen(piano(rep, 3.5, { pedal: true }), { expect: due(rep) }))
+		ok(r.hit >= 7 && r.extra.length <= 1, "repeated notes, pedal down: " + describe(r, rep.length))
+
+		// 6. a noisy room
+		r = score(scale, listen(piano(scale, 5, { noise: 0.004 })))
+		ok(r.hit >= 13 && r.extra.length <= 2, "scale in a noisy room: " + describe(r, scale.length))
+
+		// 7. wrong octave: expected C5, played C4. Must hear C4, not credit C5.
+		const wrongOct = [{ t: 0.5, d: 0.5, p: 60 }]
+		const ev7 = listen(piano(wrongOct, 1.5), { expect: () => [72] })
+		ok(ev7.some(e => e.type === "on" && e.p === 60) && !ev7.some(e => e.type === "on" && e.p === 72), "played C4 when C5 was expected: heard " + ev7.filter(e => e.type === "on").map(e => name(e.p)).join(","))
+
+		// 8. octave chord C4+C5, expected
+		const oct = [{ t: 0.5, d: 0.6, p: 60 }, { t: 0.5, d: 0.6, p: 72 }]
+		const ev8 = listen(piano(oct, 1.5), { expect: () => [60, 72] })
+		ok([60, 72].every(p => ev8.some(e => e.type === "on" && e.p === p)), "octave C4+C5 (expected): heard " + ev8.filter(e => e.type === "on").map(e => name(e.p)).join(","))
+
+		// 9. the game's own bass through the speakers is ignored
+		const bass = seq([36, 43, 36, 43], 0.5, 0.5)
+		const ev9 = listen(piano(bass, 3), { heard: bass })
+		ok(!ev9.some(e => e.type === "on"), "game's own bass ignored: heard " + (ev9.filter(e => e.type === "on").map(e => name(e.p)).join(",") || "nothing"))
+
+		// 10. silence and soft noise make no notes
+		const ev10 = listen(piano([], 3, { noise: 0.003 }))
+		ok(!ev10.some(e => e.type === "on"), "quiet room: no false notes")
+
+		// 11. note-offs: a held note stays held, a short one is released
+		const hold = [{ t: 0.5, d: 1.5, p: 64 }, { t: 2.5, d: 0.2, p: 67 }]
+		const ev11 = listen(piano(hold, 4))
+		const off64 = ev11.find(e => e.type === "off" && e.p === 64), off67 = ev11.find(e => e.type === "off" && e.p === 67)
+		ok(off64 && off64.t > 1.6 && off64.t < 2.3 && off67 && off67.t < 3.0, `releases: E4 off at ${off64?.t.toFixed(2)} (held to 2.0), G4 off at ${off67?.t.toFixed(2)} (held to 2.7)`)
+
+		const meds = all.map(r => r.med)
+		ok(meds.every(m => Math.abs(m) < 25), "onset timing within 25 ms: " + meds.map(Math.round).join(", ") + " ms")
+	} catch (e) {
+		ok(false, "threw: " + (e.stack || e.message))
+	}
+	out.textContent = log.join("\n")
+	document.title = log.some(l => l.startsWith("FAIL")) ? "FAILED" : "PASSED"
+	fetch("/__result?" + encodeURIComponent(log.join(" || "))).catch(() => {})
+</script>

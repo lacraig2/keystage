@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage audio import tests</title>
+<pre id="out">running (downloads models from the CDN; separation can take minutes on the CPU)</pre>
+<script type="module">
+	import { importRecording, findBeat, toWav } from "../js/audioimport.js"
+
+	const log = []
+	const out = document.getElementById("out")
+	const ok = (cond, name) => {
+		log.push((cond ? "PASS " : "FAIL ") + name)
+		out.textContent = log.join("\n") + "\n…"
+	}
+	const SR = 44100
+
+	// A piano-ish tone: decaying harmonics.
+	function render(notes, seconds, { kick = 0 } = {}) {
+		const L = new Float32Array(SR * seconds)
+		for (const { t, d, p } of notes) {
+			const f = 440 * Math.pow(2, (p - 69) / 12)
+			const s0 = Math.round(t * SR), n = Math.round((d + 0.3) * SR)
+			for (let i = 0; i < n && s0 + i < L.length; i++) {
+				const tt = i / SR
+				const env = Math.min(1, tt / 0.005) * Math.exp(-tt * 2.5) * (tt < d ? 1 : Math.exp(-(tt - d) * 20))
+				L[s0 + i] += 0.25 * env * (Math.sin(2 * Math.PI * f * tt) + 0.4 * Math.sin(4 * Math.PI * f * tt) + 0.15 * Math.sin(6 * Math.PI * f * tt))
+			}
+		}
+		if (kick) {
+			for (let b = 0; b * kick < seconds; b++) {
+				const s0 = Math.round(b * kick * SR)
+				for (let i = 0; i < SR * 0.15 && s0 + i < L.length; i++) {
+					const tt = i / SR
+					L[s0 + i] += 0.5 * Math.exp(-tt * 30) * Math.sin(2 * Math.PI * (50 + 100 * Math.exp(-tt * 40)) * tt)
+				}
+			}
+		}
+		return L
+	}
+
+	// Ode to Joy's first line at 100 BPM
+	const beat = 0.6
+	const melody = [64, 64, 65, 67, 67, 65, 64, 62, 60, 60, 62, 64, 64, 62, 62]
+	const lens = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5, 0.5, 2]
+	const notes = []
+	let t = 1
+	melody.forEach((p, i) => {
+		notes.push({ t, d: lens[i] * beat * 0.9, p })
+		t += lens[i] * beat
+	})
+
+	try {
+		// beat tracker on a 100 BPM kick
+		const kickOnly = render([], 20, { kick: beat })
+		const b = findBeat([kickOnly, kickOnly])
+		ok(Math.abs(b.bpm - 100) < 2 || Math.abs(b.bpm - 200) < 3 || Math.abs(b.bpm - 50) < 1, `beat: ${b.bpm} BPM (expected 100)`)
+
+		// solo piano: transcription only
+		const piano = render(notes, 14)
+		const file = new File([toWav([piano, piano], SR)], "ode.wav", { type: "audio/wav" })
+		const t0 = performance.now()
+		const entry = await importRecording(file, { title: "Ode test", solo: true, onStatus: s => (out.textContent = log.join("\n") + `\n${Math.round(s.pct * 100)}% ${s.msg}`) })
+		const got = entry.notes.map(n => n.p)
+		const hit = melody.filter((p, i) => entry.notes.some(n => n.p === p && Math.abs(n.t - notes[i].t) < 0.08)).length
+		ok(hit >= melody.length - 2, `transcribed ${hit}/${melody.length} melody notes in ${Math.round(performance.now() - t0)} ms (got ${got.join(",")})`)
+		ok(entry.guide.size > 1e5 && entry.backing === null, "solo piano: guide kept, no band")
+
+		// separation: piano melody over a kick drum, 12 seconds
+		if (new URLSearchParams(location.search).has("separate")) {
+			const mixL = render(notes, 12, { kick: beat })
+			const mixFile = new File([toWav([mixL, mixL], SR)], "mix.wav", { type: "audio/wav" })
+			const t1 = performance.now()
+			const e2 = await importRecording(mixFile, { title: "Mix test", onStatus: s => (out.textContent = log.join("\n") + `\n${Math.round(s.pct * 100)}% ${s.msg}`) })
+			const hit2 = melody.filter((p, i) => notes[i].t < 11 && e2.notes.some(n => n.p === p && Math.abs(n.t - notes[i].t) < 0.1)).length
+			const expect = melody.filter((p, i) => notes[i].t < 11).length
+			ok(hit2 >= expect - 3, `separated + transcribed ${hit2}/${expect} notes in ${Math.round((performance.now() - t1) / 1000)} s`)
+			ok(e2.backing && e2.backing.size > 1e5, "band track made from mix minus piano")
+		}
+	} catch (e) {
+		ok(false, "threw: " + (e.stack || e.message))
+	}
+	out.textContent = log.join("\n")
+	document.title = log.some(l => l.startsWith("FAIL")) ? "FAILED" : "PASSED"
+	// Headless runs read this from the test server's request log.
+	fetch("/__result?" + encodeURIComponent(log.join(" || "))).catch(() => {})
+</script>

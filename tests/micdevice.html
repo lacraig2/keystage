@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage microphone device test</title>
+<pre id="out">running</pre>
+<script type="module">
+	// Run with Chrome's fake microphone playing a C major scale (C4..C5, one note every 0.5 s):
+	// --use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=scale.wav
+	import { Input } from "../js/input.js"
+	const out = document.getElementById("out")
+	const input = new Input()
+	const ons = []
+	input.listen("on", (p, v, ts) => ons.push({ p, ts }))
+	let result
+	try {
+		await input.enableMic({ cancelEcho: false })
+		await new Promise(r => setTimeout(r, 9000))
+		const scale = [60, 62, 64, 65, 67, 69, 71, 72]
+		// find the scale in the stream (the file loops)
+		let best = 0, gaps = []
+		for (let i = 0; i < ons.length; i++) {
+			let k = 0
+			while (k < scale.length && ons[i + k]?.p === scale[k]) k++
+			if (k > best) {
+				best = k
+				gaps = ons.slice(i + 1, i + k).map((o, j) => o.ts - ons[i + j].ts)
+			}
+		}
+		const steady = gaps.length > 0 && gaps.every(g => Math.abs(g - 500) < 25)
+		result = `${best === 8 && steady ? "PASS" : "FAIL"} mic heard ${best}/8 scale notes in order, gaps ${gaps.map(Math.round).join(",")} ms; all notes: ${ons.map(o => o.p).join(",")}`
+	} catch (e) {
+		result = "FAIL threw: " + (e.stack || e.message)
+	}
+	out.textContent = result
+	fetch("/__result?" + encodeURIComponent(result)).catch(() => {})
+</script>

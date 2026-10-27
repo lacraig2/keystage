@@ -1,0 +1,203 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage logic tests</title>
+<pre id="out">running</pre>
+<script type="module">
+	import { Game } from "../js/game.js"
+	import { SONGS, songWarnings } from "../js/songs.js"
+	import { parseMidi, songFromMidi, defaultPlayerParts } from "../js/midi.js"
+	import { assignHands, suggestFingers } from "../js/hands.js"
+	import { songFromRecording, readSongPack } from "../js/library.js"
+	import { audio } from "../js/audio.js"
+
+	const log = []
+	const ok = (cond, name) => log.push((cond ? "PASS " : "FAIL ") + name)
+	const fakeInput = () => {
+		const h = { on: [], off: [], pedal: [] }
+		return { held: new Set(), listen: (t, f) => (h[t].push(f), () => {}), h }
+	}
+	const fx = new Proxy({}, { get: () => () => {} })
+	const settings = { offset: 0, echo: false }
+
+	function perform(songId, jitterMs, skipEvery = 0, speed = 1) {
+		const song = SONGS.find(s => s.id === songId)
+		const input = fakeInput()
+		const g = new Game({ song, mode: "perform", hands: "R", speed, simplified: false, settings, input, fx })
+		g.start()
+		let i = 0
+		for (const n of g.playable) {
+			i++
+			const perf = g.perfZero + (n.t * 1000) / speed + jitterMs
+			g.update(perf - 5)
+			if (skipEvery && i % skipEvery === 0) continue
+			input.h.on.forEach(f => f(n.p, 0.8, perf))
+		}
+		g.update(g.perfZero + ((song.lengthSec + 3) * 1000) / speed)
+		return g
+	}
+
+	let g = perform("mary", 0)
+	ok(g.counts.perfect === g.playable.length && g.counts.miss === 0, `mary perfect run: ${JSON.stringify(g.counts)}`)
+	ok(g.finished && g.results().stars === 5, "finished with 5 stars")
+	ok(g.maxCombo === g.playable.length, "combo spans whole song")
+
+	g = perform("ode", 70)
+	ok(g.counts.great === g.playable.length, `70ms late = all great: ${JSON.stringify(g.counts)}`)
+	ok(g.results().tendency === "late", "detects late tendency")
+
+	g = perform("ode", 0, 5)
+	const expectMiss = Math.floor(g.playable.length / 5)
+	ok(g.counts.miss === expectMiss, `skipped notes become misses (${g.counts.miss}/${expectMiss})`)
+
+	g = perform("gig", -60, 0, 0.5)
+	ok(g.counts.great === g.playable.length, `half speed: windows stay in real time (60ms early = great): ${JSON.stringify(g.counts)}`)
+	ok(g.results().tendency === "early", "detects early tendency")
+
+	// star phrase -> overdrive
+	g = perform("gig", 0)
+	ok(g.od > 0, `overdrive charged from star phrases: ${g.od}`)
+
+	// practice mode waits
+	{
+		const song = SONGS.find(s => s.id === "mary")
+		const input = fakeInput()
+		const p = new Game({ song, mode: "practice", hands: "R", speed: 1, simplified: false, settings, input, fx })
+		p.start()
+		let now = performance.now()
+		for (let k = 0; k < 300; k++) p.update((now += 16))
+		const first = p.playable[0]
+		ok(Math.abs(p.st - first.t) < 1e-6 && p.isWaitingNow(), `practice clock waits at first note (st=${p.st.toFixed(3)})`)
+		input.h.on.forEach(f => f(first.p + 1, 1, now)) // wrong key
+		input.h.on.forEach(f => f(first.p, 1, now))
+		ok(first.judged === "good" && p.counts.extra === 1, "wrong key then right key = retry")
+		for (const n of p.playable.slice(1)) {
+			for (let k = 0; k < 200 && !p.isWaitingNow(); k++) p.update((now += 16))
+			input.h.on.forEach(f => f(n.p, 1, now))
+		}
+		for (let k = 0; k < 400 && !p.finished; k++) p.update((now += 16))
+		ok(p.finished && p.counts.perfect === p.playable.length - 1, `practice completes: ${JSON.stringify(p.counts)}`)
+	}
+
+	// MIDI round trip: build a tiny 2-track SMF by hand
+	{
+		const bytes = []
+		const push = (...b) => bytes.push(...b)
+		const u32 = n => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
+		push(...[77, 84, 104, 100], ...u32(6), 0, 1, 0, 2, 1, 224) // MThd fmt1 2 trks 480ppq
+		const trk = ev => {
+			push(...[77, 84, 114, 107], ...u32(ev.length), ...ev)
+		}
+		// track 1: tempo 120, piano C5 E5 quarters (running status on 2nd note)
+		trk([0, 255, 81, 3, 7, 161, 32, 0, 0xc0, 0, 0, 0x90, 72, 100, 0x83, 0x60, 72, 0, 0, 76, 100, 0x83, 0x60, 0x80, 76, 0, 0, 255, 47, 0])
+		// track 2: drums kick on ch10
+		trk([0, 0x99, 36, 100, 0x83, 0x60, 0x89, 36, 0, 0, 255, 47, 0])
+		const parsed = parseMidi(new Uint8Array(bytes).buffer)
+		ok(parsed.bpm === 120 && parsed.parts.length === 2, `parsed: bpm ${parsed.bpm}, parts ${parsed.parts.map(p => p.label)}`)
+		const pick = defaultPlayerParts(parsed)
+		const s = songFromMidi(parsed, { id: "t", title: "t", playerParts: pick })
+		ok(s.notes.length === 2 && Math.abs(s.notes[1].t - 0.5) < 1e-6, `notes timed: ${s.notes.map(n => n.t)}`)
+		ok(s.backing.length === 1 && s.backing[0].kind === "kick", "drums became backing")
+	}
+
+	// wrong octave: practice waits on E4, player hits E5
+	{
+		const song = SONGS.find(s => s.id === "mary")
+		const input = fakeInput()
+		let told = null
+		const fx2 = new Proxy({}, { get: (_, k) => (k === "wrong" ? (p, t) => (told = t) : () => {}) })
+		const p = new Game({ song, mode: "practice", hands: "R", speed: 1, simplified: false, settings, input, fx: fx2 })
+		p.start()
+		let now = performance.now()
+		for (let k = 0; k < 300; k++) p.update((now += 16))
+		const first = p.playable[0]
+		input.h.on.forEach(f => f(first.p + 12, 1, now))
+		ok(told === first && p.octaveSlips === 1, "octave-up press is flagged with the intended note")
+		input.h.on.forEach(f => f(first.p + 1, 1, now))
+		ok(p.octaveSlips === 1, "a plain wrong key is not an octave slip")
+	}
+
+	// hand split + fingering on one part: bass line under a melody
+	{
+		const ns = []
+		const mel = [64, 62, 60, 62, 64, 64, 64, 62, 62, 62, 64, 67, 67]
+		mel.forEach((p, i) => ns.push({ t: i * 0.5, d: 0.5, p }))
+		;[48, 43, 48, 43].forEach((p, i) => ns.push({ t: i * 1.5, d: 1.5, p }))
+		ns.push({ t: 7, d: 1, p: 57 }, { t: 7, d: 1, p: 59 }) // a low-ish RH dip in a chord with no bass
+		assignHands(ns)
+		const wrong = ns.filter(n => (n.p >= 57) !== (n.hand === "R"))
+		ok(!wrong.length, `hand split follows the music: ${wrong.map(n => n.p + n.hand)}`)
+		suggestFingers(ns)
+		ok(ns.every(n => n.finger >= 1 && n.finger <= 5), "fingers are 1-5")
+		const rh = ns.filter(n => n.hand === "R" && n.t < 7)
+		ok(rh.find(n => n.p === 60).finger === 1 && rh.find(n => n.p === 64).finger === 3, `C-D-E melody fingered 1-2-3: ${rh.map(n => n.finger).join("")}`)
+		const lh = ns.filter(n => n.hand === "L")
+		ok(lh.find(n => n.p === 48).finger === 1 && lh.find(n => n.p === 43).finger === 4, `LH C3/G2 = 1/4: ${lh.map(n => n.finger).join("")}`)
+	}
+
+	// songs from recordings: timing relative to the first note, bar lines from the downbeat
+	{
+		const notes = [{ t: 4.0, d: 0.4, p: 72 }, { t: 4.5, d: 0.4, p: 74 }, { t: 4.5, d: 1, p: 48 }]
+		const s = songFromRecording({ id: "x", title: "x", bpm: 120, beatsPerBar: 4, downbeat: 0.5, notes })
+		ok(s.recording.offset === 4 && s.notes[0].t === 0 && s.intro === 4, `recording offset/intro: ${s.recording.offset}/${s.intro}`)
+		ok(Math.abs(s.pickup - 1) < 1e-9, `downbeat 0.5s, first note 4.0s at 120bpm = bar line 1 beat in: ${s.pickup}`)
+		ok(s.notes.find(n => n.p === 48).hand === "L" && s.notes.find(n => n.p === 72).hand === "R", "recording notes split between hands")
+	}
+
+	// song pack round trip: a stored zip built by hand
+	{
+		const enc = new TextEncoder()
+		const files = { "song.json": enc.encode(JSON.stringify({ title: "Pack", bpm: 100, downbeat: 0, notes: [{ t: 1, d: 0.5, p: 60 }] })), "backing.ogg": new Uint8Array([1, 2, 3]) }
+		const parts = [], central = []
+		let off = 0
+		for (const [name, data] of Object.entries(files)) {
+			const nb = enc.encode(name)
+			const lh = new DataView(new ArrayBuffer(30))
+			lh.setUint32(0, 0x04034b50, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, nb.length, true)
+			const ch = new DataView(new ArrayBuffer(46))
+			ch.setUint32(0, 0x02014b50, true); ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, nb.length, true); ch.setUint32(42, off, true)
+			parts.push(new Uint8Array(lh.buffer), nb, data)
+			central.push(new Uint8Array(ch.buffer), nb)
+			off += 30 + nb.length + data.length
+		}
+		const cdSize = central.reduce((a, b) => a + b.length, 0)
+		const end = new DataView(new ArrayBuffer(22))
+		end.setUint32(0, 0x06054b50, true); end.setUint16(8, 2, true); end.setUint16(10, 2, true); end.setUint32(12, cdSize, true); end.setUint32(16, off, true)
+		const pack = await readSongPack(new Blob([...parts, ...central, new Uint8Array(end.buffer)]))
+		ok(pack.title === "Pack" && pack.notes.length === 1 && pack.backing.size === 3 && pack.guide === null, `song pack read: ${pack.title}, backing ${pack.backing?.size} bytes`)
+	}
+
+	// time-stretch keeps pitch: a 440 Hz tone slowed to 50% is twice as long and still 440 Hz
+	{
+		audio.ensure()
+		const sr = 44100, buf = audio.ctx.createBuffer(1, sr, sr)
+		const d = buf.getChannelData(0)
+		for (let i = 0; i < sr; i++) d[i] = Math.sin((2 * Math.PI * 440 * i) / sr)
+		const out = audio.stretch(buf, 0.5)
+		const o = out.getChannelData(0)
+		let crossings = 0
+		for (let i = sr / 2; i < sr * 1.5; i++) if (o[i - 1] < 0 && o[i] >= 0) crossings++
+		ok(Math.abs(out.length - 2 * sr) < 10 && Math.abs(crossings - 440) <= 3, `stretched: ${(out.length / sr).toFixed(2)}s, ${crossings} Hz`)
+	}
+
+	// every built-in song: bar lines line up, both hands fingered, the band has something to play
+	{
+		ok(!songWarnings().length, `bar lines all line up: ${songWarnings().join("; ") || "ok"}`)
+		const bad = SONGS.filter(s => !s.notes.length || s.notes.some(n => !n.finger || n.finger > 5 || !(n.d > 0)) || (s.drums !== "none" && !s.backing.length))
+		ok(!bad.length, `${SONGS.length} songs build with fingering and a band: ${bad.map(s => s.id).join(",") || "ok"}`)
+		const lens = SONGS.map(s => `${s.id} ${Math.round(s.lengthSec)}s`)
+		ok(SONGS.every(s => s.lengthSec > 15 && s.lengthSec < 240), `song lengths: ${lens.join(", ")}`)
+	}
+
+	// a MIDI file with the piano doubled on a second track (common in "piano chords" downloads)
+	{
+		const notes = [60, 64, 67, 48, 62, 65, 69, 50].map((p, i) => ({ t: Math.floor(i / 4) * 2, d: 0.5, p, vel: 0.8 }))
+		const part = (id, label, program) => ({ id, label, program, drums: false, notes: notes.map(n => ({ ...n })), avg: 60 })
+		const parsed = { bpm: 120, beatsPerBar: 4, parts: [part(0, "Grand Piano", 0), part(1, "Electric Piano", 5)] }
+		const picked = defaultPlayerParts(parsed)
+		const both = songFromMidi(parsed, { id: "dbl", title: "Doubled", playerParts: [0, 1] })
+		ok(picked.length === 1 && both.notes.length === notes.length && both.backing.length === 0, `doubled piano track played once, not by both hands: picked ${picked}, ${both.notes.length} notes, ${both.backing.length} band notes`)
+	}
+
+	document.getElementById("out").textContent = log.join("\n")
+	document.title = log.some(l => l.startsWith("FAIL")) ? "FAILED" : "PASSED"
+</script>
