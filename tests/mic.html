@@ -15,7 +15,9 @@
 	// a weak fundamental in the bass, a hammer thump, and the damper cutting the note off.
 	let seed = 1
 	const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1
-	function piano(notes, seconds, { noise = 0, pedal = false } = {}) {
+	// real: closer to a real piano heard through a phone. Uneven, strong upper partials,
+	// detuned unison strings (beating), a mic with little bass, and room reverb.
+	function piano(notes, seconds, { noise = 0, pedal = false, real = false } = {}) {
 		const L = new Float32Array(SR * seconds)
 		for (const { t, d, p, v = 0.7 } of notes) {
 			const f0 = hz(p), B = p < 60 ? 0.0003 : 0.0003 * Math.pow(2, (p - 60) / 12)
@@ -28,10 +30,15 @@
 			for (let h = 1; h <= 16; h++) {
 				const f = h * f0 * Math.sqrt(1 + B * h * h)
 				if (f > SR / 2.2) break
-				let a = 1 / Math.pow(h, 1.1)
-				if (p < 48 && h === 1) a *= 0.25 // small speakers/mics and bass strings: weak fundamental
+				let a = 1 / Math.pow(h, real ? 0.6 : 1.1)
+				if (real) a *= (0.6 + 0.8 * Math.abs(rnd())) * Math.pow(f / (f + 300), 2) // phone mic: little below ~300 Hz
+				else if (p < 48 && h === 1) a *= 0.25 // small speakers/mics and bass strings: weak fundamental
 				if (h === 8) a *= 0.2 // hammer strikes near 1/8 of the string
-				parts.push({ w: 2 * Math.PI * f, a, decay: 0.6 + h * 0.5 + (p - 40) * 0.03, ph: rnd() * 3 })
+				const decay = 0.6 + h * 0.5 + (p - 40) * 0.03
+				if (real) {
+					// three strings a little out of tune with each other
+					for (const c of [-1.2, 0, 1.4]) parts.push({ w: 2 * Math.PI * f * Math.pow(2, c / 1200), a: a / 3, decay, ph: rnd() * 3 })
+				} else parts.push({ w: 2 * Math.PI * f, a, decay, ph: rnd() * 3 })
 			}
 			for (let i = 0; i < n && s0 + i < L.length; i++) {
 				const tt = i / SR
@@ -42,8 +49,24 @@
 				L[s0 + i] += 0.08 * v * (Math.min(1, tt / 0.002) * s * damp + thump)
 			}
 		}
+		if (real) reverb(L)
 		if (noise) for (let i = 0; i < L.length; i++) L[i] += noise * rnd()
 		return L
+	}
+
+	// A living room: Schroeder reverb (parallel combs, then allpasses), about 0.5 s.
+	function reverb(L) {
+		const wet = new Float32Array(L.length)
+		for (const [ms, g] of [[29.7, 0.78], [37.1, 0.76], [41.1, 0.74], [43.7, 0.72]]) {
+			const d = Math.round((ms * SR) / 1000), buf = new Float32Array(L.length)
+			for (let i = 0; i < L.length; i++) buf[i] = L[i] + (i >= d ? g * buf[i - d] : 0)
+			for (let i = 0; i < L.length; i++) wet[i] += buf[i] * 0.25
+		}
+		for (const ms of [5, 1.7]) {
+			const d = Math.round((ms * SR) / 1000), g = 0.7, x = wet.slice()
+			for (let i = 0; i < L.length; i++) wet[i] = -g * x[i] + (i >= d ? x[i - d] + g * wet[i - d] : 0)
+		}
+		for (let i = 0; i < L.length; i++) L[i] += 0.5 * wet[i]
 	}
 
 	function listen(audio, { expect = () => [], heard = [] } = {}) {
@@ -145,6 +168,21 @@
 		const ev11 = listen(piano(hold, 4))
 		const off64 = ev11.find(e => e.type === "off" && e.p === 64), off67 = ev11.find(e => e.type === "off" && e.p === 67)
 		ok(off64 && off64.t > 1.6 && off64.t < 2.3 && off67 && off67.t < 3.0, `releases: E4 off at ${off64?.t.toFixed(2)} (held to 2.0), G4 off at ${off67?.t.toFixed(2)} (held to 2.7)`)
+
+		// 12. the same, on a "real" piano in a room through a phone
+		for (const [label, notes, opts] of [
+			["scale, song unknown", scale, {}],
+			["melody + bass (as in a song)", both, { expect: due(both) }],
+			["triads (as in a song)", triads, { expect: due(triads) }],
+			["triads, song unknown", triads, {}],
+			["low F2..E3", low, {}],
+			["high C5..C7", high, {}],
+			["repeated notes, pedal down", rep, { expect: due(rep), pedal: true }],
+		]) {
+			const end = Math.max(...notes.map(n => n.t + n.d)) + 1
+			r = score(notes, listen(piano(notes, end, { real: true, pedal: opts.pedal }), opts))
+			ok(r.hit >= notes.length - Math.ceil(notes.length / 8) && r.extra.length <= Math.ceil(notes.length / 8), "real piano, " + label + ": " + describe(r, notes.length))
+		}
 
 		const meds = all.map(r => r.med)
 		ok(meds.every(m => Math.abs(m) < 25), "onset timing within 25 ms: " + meds.map(Math.round).join(", ") + " ms")

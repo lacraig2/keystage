@@ -59,8 +59,10 @@ Push this folder to a GitHub repository, then **Settings → Pages → Deploy fr
 | `serve.py` | Local test server, plus a `/fetch` proxy so URL imports work locally |
 | `tests/logic.html` | Judging, practice, MIDI, hands, songs, packs, time-stretch |
 | `tests/mic.html` | Microphone note detection on synthesized piano: scales, chords, bass, pedal, noise, wrong octave |
-| `mictest.html` | Microphone check: what the detector hears, recording for tuning, Basic Pitch comparison |
+| `mictest.html` | Microphone check: what the detector hears, recording for tuning (with a MIDI keyboard's notes as the right answers), detector scores, Basic Pitch comparison |
 | `tests/micdevice.html` | The whole microphone path, using Chrome's fake microphone (flags in the file) |
+| `tests/replay.html` | Replays Mic check recordings (put them in `recordings/`) through the detector and scores it against their MIDI notes |
+| `tests/micdebug.html` | Prints every pitch decision for a few synthesized notes, for tuning the detector |
 | `tests/audio.html` | Transcription and beat tracking (`?separate` also runs piano separation) |
 
 `?watch=<songId>` jumps straight to watch mode (for example `?watch=bells`).

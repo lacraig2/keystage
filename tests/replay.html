@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Keystage mic replay</title>
+<pre id="out">running</pre>
+<script type="module">
+	// Replays recordings from the Mic check page (a .wav plus its .json, with MIDI as the right
+	// answers) through the live detector and scores it. Put the pairs in recordings/ (not committed)
+	// and open tests/replay.html?f=keystage-mic-2026-10-27-10-00,keystage-mic-...
+	import { NoteListener, HOP } from "../js/pitch.js"
+
+	const out = document.getElementById("out")
+	const name = p => ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"][p % 12] + (Math.floor(p / 12) - 1)
+	const lines = []
+
+	function readWav(buf) {
+		const v = new DataView(buf)
+		let o = 12, fmt, data
+		while (o + 8 <= v.byteLength) {
+			const id = String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3)), len = v.getUint32(o + 4, true)
+			if (id === "fmt ") fmt = { ch: v.getUint16(o + 10, true), sr: v.getUint32(o + 12, true) }
+			if (id === "data") data = { o: o + 8, len }
+			o += 8 + len + (len & 1)
+		}
+		const n = Math.floor(data.len / 2 / fmt.ch), L = new Float32Array(n)
+		for (let i = 0; i < n; i++) L[i] = v.getInt16(data.o + i * 2 * fmt.ch, true) / 32768
+		return { L, sr: fmt.sr }
+	}
+
+	function run(L, sr) {
+		const nl = new NoteListener(sr)
+		const ev = []
+		for (let i = 0; i + HOP <= L.length; i += HOP) {
+			const ts = ((i + HOP) / sr) * 1000
+			for (const e of nl.push(L.subarray(i, i + HOP), ts)) ev.push({ ...e, t: e.ts / 1000 })
+		}
+		return ev
+	}
+
+	// Same key within 100 ms = found. Extras are labelled with how they relate to a played note.
+	function score(truth, ev) {
+		const keys = truth.filter(e => e.type === "on"), ons = ev.filter(e => e.type === "on"), used = new Set(), errs = []
+		const missed = []
+		for (const n of keys) {
+			const i = ons.findIndex((e, j) => !used.has(j) && e.p === n.p && Math.abs(e.t - n.t) < 0.1)
+			if (i >= 0) used.add(i), errs.push((ons[i].t - n.t) * 1000)
+			else missed.push(n)
+		}
+		const kinds = {}
+		const extra = ons.filter((e, j) => !used.has(j)).map(e => {
+			const near = keys.filter(n => Math.abs(n.t - e.t) < 0.1)
+			const d = near.length ? near.map(n => e.p - n.p).sort((a, b) => Math.abs(a) - Math.abs(b))[0] : null
+			const kind = d === null ? "no key near" : d === 0 ? "late/early dup" : { 12: "octave up", 19: "12th up", 24: "2 oct up", 28: "17th up", 31: "19th up", "-12": "octave down", 1: "semitone up", "-1": "semitone down" }[d] || `${d > 0 ? "+" : ""}${d} st`
+			kinds[kind] = (kinds[kind] || 0) + 1
+			return `${name(e.p)}@${e.t.toFixed(2)}(${kind})`
+		})
+		errs.sort((a, b) => a - b)
+		return { keys: keys.length, found: errs.length, extra, kinds, missed, med: errs.length ? Math.round(errs[errs.length >> 1]) : NaN }
+	}
+
+	let tot = { keys: 0, found: 0, extra: 0 }
+	for (const f of (new URLSearchParams(location.search).get("f") || "").split(",").filter(Boolean)) {
+		try {
+			const [wav, info] = await Promise.all([fetch(`../recordings/${f}.wav`).then(r => r.arrayBuffer()), fetch(`../recordings/${f}.json`).then(r => r.json())])
+			const { L, sr } = readWav(wav)
+			const r = score(info.midi, run(L, sr))
+			tot.keys += r.keys, (tot.found += r.found), (tot.extra += r.extra.length)
+			lines.push(`${f}: found ${r.found}/${r.keys}, ${r.extra.length} extra, timing ${r.med} ms`)
+			lines.push(`  extra by kind: ${JSON.stringify(r.kinds)}`)
+			lines.push(`  extra: ${r.extra.slice(0, 40).join(" ")}`)
+			lines.push(`  missed: ${r.missed.slice(0, 40).map(n => name(n.p) + "@" + n.t.toFixed(2)).join(" ")}`)
+		} catch (e) {
+			lines.push(`${f}: ${e.message}`)
+		}
+	}
+	lines.push(`TOTAL found ${tot.found}/${tot.keys}, ${tot.extra} extra`)
+	out.textContent = lines.join("\n")
+	fetch("/__result?" + encodeURIComponent(lines.join(" || "))).catch(() => {})
+</script>

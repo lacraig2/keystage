@@ -28,6 +28,8 @@
 				<li>Play slowly, one note at a time: <b>C D E F G A B C</b> from middle C, then <b>C E G</b> together, then a low <b>C</b> with your left hand, then a bit of any song.</li>
 				<li>Press <b>Stop</b>, then <b>Save recording</b>. Send the two files back for tuning.</li>
 			</ol>
+			<p><b>Have a MIDI keyboard?</b> Plug it in and play it while recording (its own speakers are fine). Every key you press is saved as the right answer next to the audio, and the page scores the detector for you.</p>
+			<p id="midi" class="hint"></p>
 			<label class="inline"><input type="checkbox" id="echo" /> Filter out computer sound (echo cancellation)</label>
 			<div class="mic-row">
 				<button id="mic" class="btn primary">Start microphone</button>
@@ -38,6 +40,7 @@
 			</div>
 			<p id="status" class="hint"></p>
 			<div id="now" class="big-notes"></div>
+			<p id="score"></p>
 		</div>
 		<div class="cols">
 			<div class="panel">
@@ -66,26 +69,54 @@
 
 		const input = new Input()
 		let t0 = performance.now()
-		let rec = null // { chunks: [], start, events: [] }
-		let last = { L: null, events: [], sr: 48000 }
+		// rec.start: performance.now() time of the recording's first sample; every event is stored
+		// in seconds from there, so it lines up with the audio file.
+		let rec = null // { chunks: [], start, events: [], midi: [], pedal: [] }
+		let last = { L: null, events: [], midi: [], pedal: [], sr: 48000 }
 		const lines = []
 		const sounding = new Set()
 
 		input.listen("mic", level => ($("#meter > div").style.width = Math.round(level * 100) + "%"))
-		input.listen("on", (p, v, ts) => {
-			const t = ((ts - (rec?.start ?? t0)) / 1000).toFixed(2)
-			lines.push(`${t.padStart(7)} s  ${name(p).padEnd(4)} on   vel ${v.toFixed(2)}`)
-			rec?.events.push({ type: "on", p, vel: +v.toFixed(3), t: +t })
-			sounding.add(p)
+		const secs = ts => (ts - (rec?.start ?? t0)) / 1000
+		input.listen("on", (p, v, ts, src) => {
+			const t = secs(ts)
+			lines.push(`${t.toFixed(2).padStart(7)} s  ${src === "mic" ? "mic " : "MIDI"}  ${name(p).padEnd(4)} on   vel ${v.toFixed(2)}`)
+			if (rec?.start) (src === "mic" ? rec.events : rec.midi).push({ type: "on", p, vel: +v.toFixed(3), t: +t.toFixed(4) })
+			if (src === "mic") sounding.add(p)
 			show()
 		})
-		input.listen("off", (p, ts) => {
-			const t = ((ts - (rec?.start ?? t0)) / 1000).toFixed(2)
-			rec?.events.push({ type: "off", p, t: +t })
-			sounding.delete(p)
+		input.listen("off", (p, ts, src) => {
+			if (rec?.start) (src === "mic" ? rec.events : rec.midi).push({ type: "off", p, t: +secs(ts).toFixed(4) })
+			if (src === "mic") sounding.delete(p)
 			show()
 		})
-		input.listen("audio", samples => rec?.chunks.push(samples.slice()))
+		input.listen("pedal", (down, ts) => rec?.start && rec.pedal.push({ down, t: +secs(ts ?? performance.now()).toFixed(4) }))
+		input.listen("audio", (samples, ts) => {
+			if (!rec) return
+			rec.start ??= ts - (samples.length / input.mic.sampleRate) * 1000
+			rec.chunks.push(samples.slice())
+		})
+		const midiStatus = devs =>
+			($("#midi").textContent = devs.length ? `MIDI keyboard connected: ${devs.join(", ")}. Its notes will be saved with the recording.` : input.midiError || "No MIDI keyboard connected (optional).")
+		input.listen("devices", midiStatus)
+		midiStatus(input.devices)
+
+		// Score the detector against the MIDI keyboard: the same key within 100 ms counts as found.
+		function score(truth, heard) {
+			const ons = heard.filter(e => e.type === "on"), used = new Set(), errs = []
+			const played = truth.filter(e => e.type === "on")
+			for (const n of played) {
+				const i = ons.findIndex((e, j) => !used.has(j) && e.p === n.p && Math.abs(e.t - n.t) < 0.1)
+				if (i >= 0) used.add(i), errs.push((ons[i].t - n.t) * 1000)
+			}
+			errs.sort((a, b) => a - b)
+			const extra = ons.filter((e, j) => !used.has(j))
+			return { played: played.length, found: errs.length, extra, timing: errs.length ? Math.round(errs[errs.length >> 1]) : null }
+		}
+		const describe = r =>
+			`found ${r.found} of ${r.played} keys you played, ${r.extra.length} extra note${r.extra.length === 1 ? "" : "s"}` +
+			(r.extra.length ? ` (${r.extra.slice(0, 12).map(e => name(e.p)).join(" ")}${r.extra.length > 12 ? " …" : ""})` : "") +
+			(r.timing !== null ? `, typically ${Math.abs(r.timing)} ms ${r.timing >= 0 ? "late" : "early"}` : "")
 		function show() {
 			$("#live").textContent = lines.slice(-200).join("\n")
 			$("#live").scrollTop = 1e9
@@ -116,14 +147,15 @@
 				const L = new Float32Array(n)
 				let o = 0
 				for (const c of rec.chunks) L.set(c, o), (o += c.length)
-				last = { L, events: rec.events, sr: input.mic?.sampleRate || 48000 }
+				last = { L, events: rec.events, midi: rec.midi, pedal: rec.pedal, sr: input.mic?.sampleRate || 48000 }
 				rec = null
 				$("#rec").textContent = "Record"
 				$("#save").disabled = $("#compare").disabled = false
 				$("#status").textContent = `Recorded ${(L.length / last.sr).toFixed(1)} s.`
+				$("#score").textContent = last.midi.length ? "Live detector: " + describe(score(last.midi, last.events)) + "." : ""
 				return
 			}
-			rec = { chunks: [], start: performance.now(), events: [] }
+			rec = { chunks: [], start: null, events: [], midi: [], pedal: [] }
 			lines.length = 0
 			show()
 			$("#rec").textContent = "Stop"
@@ -140,7 +172,19 @@
 				setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 			}
 			dl(toWav([last.L], last.sr), `keystage-mic-${stamp}.wav`)
-			const info = { sampleRate: last.sr, echoCancellation: $("#echo").checked, userAgent: navigator.userAgent, detected: last.events }
+			const info = {
+				format: "keystage-mic-recording 1",
+				about: "Times are seconds from the first sample of the .wav. midi = keys actually pressed (the right answers), pedal = sustain pedal, detected = what the live mic detector heard.",
+				audio: `keystage-mic-${stamp}.wav`,
+				sampleRate: last.sr,
+				seconds: +(last.L.length / last.sr).toFixed(2),
+				echoCancellation: $("#echo").checked,
+				userAgent: navigator.userAgent,
+				midiDevices: input.devices,
+				midi: last.midi,
+				pedal: last.pedal,
+				detected: last.events,
+			}
 			dl(new Blob([JSON.stringify(info, null, 1)], { type: "application/json" }), `keystage-mic-${stamp}.json`)
 		}
 
@@ -149,7 +193,8 @@
 			$("#bp").textContent = "Loading Basic Pitch (first time downloads a few MB)…"
 			try {
 				const notes = await transcribe([last.L, last.L], p => ($("#bp").textContent = `Listening… ${Math.round(p * 100)}%`), last.sr)
-				$("#bp").textContent = notes.length ? notes.map(n => `${n.t.toFixed(2).padStart(7)} s  ${name(n.p).padEnd(4)} for ${n.d.toFixed(2)} s`).join("\n") : "Basic Pitch heard no notes."
+				const bpScore = last.midi.length ? "Basic Pitch: " + describe(score(last.midi, notes.map(n => ({ type: "on", p: n.p, t: n.t })))) + ".\n\n" : ""
+				$("#bp").textContent = bpScore + (notes.length ? notes.map(n => `${n.t.toFixed(2).padStart(7)} s  ${name(n.p).padEnd(4)} for ${n.d.toFixed(2)} s`).join("\n") : "Basic Pitch heard no notes.")
 			} catch (e) {
 				$("#bp").textContent = "Basic Pitch failed: " + e.message
 			}

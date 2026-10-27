@@ -15,6 +15,8 @@ const N_FLUX = 2048
 const N_PITCH = 4096
 const LO = 21, HI = 108 // A0..C8
 const MAX_F = 6000 // ignore harmonics above this
+// Count partials all the way up, so a low note's salience includes everything its octave has.
+const MAX_H = 20
 
 // --- FFT (radix 2, in place) -----------------------------------------------------------
 const ffts = new Map()
@@ -91,6 +93,7 @@ export class NoteListener {
 		this.heard = [] // {p, ts} sounds the game played itself
 		this.level = 0 // for a meter, 0..1
 		this.sensitivity = 1
+		this.debug = null // set to an array to log every pitch decision (tests/replay.html)
 		this.hopMs = (HOP / sampleRate) * 1000
 		// Timing: hops between onset and decision, and how far the flux peak trails the real attack.
 		this.decideHops = Math.max(3, Math.round((0.06 * sampleRate) / HOP))
@@ -101,7 +104,7 @@ export class NoteListener {
 			// Piano strings are slightly stiff, so upper partials run sharp (inharmonicity).
 			const B = p < 60 ? 0.0003 : 0.0003 * Math.pow(2, (p - 60) / 12)
 			const hs = []
-			for (let h = 1; h <= 10; h++) {
+			for (let h = 1; h <= MAX_H; h++) {
 				const f = h * f0 * Math.sqrt(1 + B * h * h)
 				if (f > MAX_F) break
 				const tol = Math.pow(2, (h >= 5 ? 50 : 35) / 1200)
@@ -221,6 +224,16 @@ export class NoteListener {
 		})
 	}
 
+	// Is bin k close (within ~40 cents) to one of note p's partials, however high?
+	isPartialOf(k, p) {
+		const f = k * this.binHz, f0 = hz(p)
+		const B = p < 60 ? 0.0003 : 0.0003 * Math.pow(2, (p - 60) / 12)
+		for (let h = Math.max(1, Math.floor(f / f0 / 1.05)); h <= Math.ceil(f / f0) + 1; h++) {
+			if (Math.abs(1200 * Math.log2(f / (h * f0 * Math.sqrt(1 + B * h * h)))) < 40) return true
+		}
+		return false
+	}
+
 	partialEnergy(spec, p) {
 		let e = 0
 		for (const { lo, hi } of this.harmonics[p].slice(0, 4)) {
@@ -246,7 +259,7 @@ export class NoteListener {
 		const heard = this.heard.filter(x => ts - x.ts > -60 && ts - x.ts < 180).map(x => x.p)
 		const found = []
 		const skip = new Set()
-		const peaks = new Float32Array(11)
+		const peaks = new Float32Array(MAX_H + 1)
 		// Sounds the game just made itself (other hand, bass) aren't the player: take them out first.
 		for (const q of heard) {
 			if (expected.has(q) || q < LO || q > HI) continue
@@ -259,11 +272,16 @@ export class NoteListener {
 		let first = 0
 		// The octave below an expected note really sounding (odd harmonics present) means the
 		// player hit the wrong octave: don't let its even harmonics pass for the expected note.
+		// Odd partials that belong to other expected notes (a chord's fifth is the octave below's
+		// third partial) don't count as evidence.
 		const wrongOctave = q => {
 			if (q - 12 < LO || expected.has(q - 12)) return false
 			this.salience(R, q - 12, peaks)
-			const [h1, h2, h3, h4, h5, h6] = peaks
-			return h1 + h3 + h5 > 0.5 * (h2 + h4 + h6) && h1 + h3 + h5 > 0
+			const hs = this.harmonics[q - 12]
+			const others = [...expected].filter(e => e !== q)
+			const own = i => (others.some(e => this.isPartialOf((hs[i].lo + hs[i].hi) / 2, e)) ? 0 : peaks[i])
+			const odd = own(0) + own(2) + own(4)
+			return odd > 0.5 * (peaks[1] + peaks[3] + peaks[5]) && odd > 0
 		}
 		for (let tries = 0; tries < 12 && found.length < 6; tries++) {
 			const pass1 = tries < expected.size
@@ -288,18 +306,37 @@ export class NoteListener {
 				top = Math.max(top, peaks[i])
 			})
 			const isExpected = expected.has(best)
+			const fundamental = q => peaks.slice(0, Math.min(3, Math.ceil(250 / hz(q)))).reduce((a, b) => a + b, 0)
+			// Striking a key that's still ringing (pedal down) barely raises its fundamental.
+			const restrike = isExpected && this.held.has(best)
+			// A real note shows up across its first few partials, not in one or two stray places.
+			const low = peaks.slice(0, Math.min(4, hs.length))
+			const spread = low.filter(v => v >= 0.15 * top).length >= Math.min(2, low.length)
+			// Most of an unexpected note's evidence must be its own: a note whose partials all sit on
+			// partials of notes already found (an octave up, an octave and a fifth...) is just overtones.
+			let own = 0
+			hs.forEach((x, i) => {
+				if (!found.some(f => this.isPartialOf((x.lo + x.hi) / 2, f.p))) own += peaks[i]
+			})
 			// Deep bass is hard to resolve, so an unexpected low note needs much stronger evidence.
-			const deep = !isExpected && best < 40
+			const deep = !isExpected && best < 41
 			const floor = (noise * Math.sqrt(hs.length) * (isExpected ? 4 : deep ? 12 : 7)) / this.sensitivity
-			const ok =
-				bestS > floor &&
-				bestS > 1e-3 / this.sensitivity &&
-				(!first || bestS / first > (isExpected ? 0.15 : deep ? 0.6 : 0.3)) &&
-				// A real note has energy at its own fundamental (bass strings: at least the octave above)...
-				(best >= 45 ? peaks[0] >= 0.2 * top : peaks[0] + peaks[1] >= 0.25 * top) &&
+			const checks = {
+				floor: bestS > floor && bestS > 1e-3 / this.sensitivity,
+				rel: !first || bestS / first > (isExpected ? 0.15 : deep ? 0.6 : 0.3),
+				// A real note has energy at its own fundamental. Phone mics hear little below ~250 Hz,
+				// so a low note's first two or three partials count together.
+				// A ghost an octave below a chord has nothing at all at its fundamental; a real note
+				// above the deep bass still shows a little, even through a phone.
+				fund: restrike || (fundamental(best) >= (isExpected ? 0.08 : 0.1) * top && (best < 41 || peaks[0] >= (isExpected ? 0.03 : 0.05) * top)),
+				spread: isExpected || spread,
 				// ...and at its odd harmonics, not just where an octave above has partials.
-				odd > (isExpected ? 0.25 : 0.5) * even &&
-				(isExpected || !heard.some(q => q === best || Math.abs(q - best) === 12))
+				odd: odd > (isExpected ? 0.25 : 0.5) * even,
+				heard: isExpected || !heard.some(q => q === best || Math.abs(q - best) === 12),
+				own: isExpected || own >= 0.4 * bestS,
+			}
+			const ok = Object.values(checks).every(Boolean)
+			this.debug?.push({ ts, p: best, s: +(bestS / Math.max(floor, 1e-9)).toFixed(2), rel: first ? +(bestS / first).toFixed(2) : 1, ok, failed: Object.keys(checks).filter(k => !checks[k]).join(","), peaks: [...peaks.slice(0, hs.length)].map(v => +(v / (top || 1)).toFixed(2)) })
 			if (!ok) continue
 			first ||= bestS
 			found.push({ p: best, s: bestS / Math.max(floor, 1e-9) })

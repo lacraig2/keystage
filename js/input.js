@@ -33,14 +33,15 @@ export class Input {
 		return ts > 0 && ts <= now + 5 && ts > now - 500 ? ts : now
 	}
 
-	noteOn(p, vel, ts, exact) {
+	// src: "midi", "mic" or "keys" (computer keyboard / touch), for pages that tell them apart
+	noteOn(p, vel, ts, exact, src = "keys") {
 		this.held.add(p)
-		this.emit("on", p, vel, this.stamp(ts, exact))
+		this.emit("on", p, vel, this.stamp(ts, exact), src)
 	}
 
-	noteOff(p, ts, exact) {
+	noteOff(p, ts, exact, src = "keys") {
 		this.held.delete(p)
-		this.emit("off", p, this.stamp(ts, exact))
+		this.emit("off", p, this.stamp(ts, exact), src)
 	}
 
 	// --- Microphone ------------------------------------------------------------------
@@ -83,8 +84,8 @@ export class Input {
 				? o.performanceTime + (t - o.contextTime) * 1000 - (ctx.outputLatency || ctx.baseLatency || 0) * 1000 - 10
 				: performance.now() - (ctx.currentTime - t) * 1000 - 10
 			for (const ev of listener.push(samples, ts)) {
-				if (ev.type === "on") this.noteOn(ev.p, ev.vel, ev.ts, true)
-				else this.noteOff(ev.p, ev.ts, true)
+				if (ev.type === "on") this.noteOn(ev.p, ev.vel, ev.ts, true, "mic")
+				else this.noteOff(ev.p, ev.ts, true, "mic")
 			}
 			this.emit("mic", listener.level)
 			if (this.handlers.audio.length) this.emit("audio", samples, ts)
@@ -101,7 +102,7 @@ export class Input {
 		src.disconnect()
 		node.disconnect()
 		sink.disconnect()
-		for (const p of listener.held.keys()) this.noteOff(p, performance.now(), true)
+		for (const p of listener.held.keys()) this.noteOff(p, performance.now(), true, "mic")
 		this.mic = null
 		this.emit("devices", this.devices)
 	}
@@ -147,9 +148,9 @@ export class Input {
 	onMessage(e) {
 		const [st, a, b] = e.data
 		const kind = st & 0xf0
-		if (kind === 0x90 && b > 0) this.noteOn(a, b / 127, e.timeStamp)
-		else if (kind === 0x80 || (kind === 0x90 && b === 0)) this.noteOff(a, e.timeStamp)
-		else if (kind === 0xb0 && a === 64) this.emit("pedal", b >= 64)
+		if (kind === 0x90 && b > 0) this.noteOn(a, b / 127, e.timeStamp, false, "midi")
+		else if (kind === 0x80 || (kind === 0x90 && b === 0)) this.noteOff(a, e.timeStamp, false, "midi")
+		else if (kind === 0xb0 && a === 64) this.emit("pedal", b >= 64, this.stamp(e.timeStamp), "midi")
 	}
 
 	initKeyboard() {
