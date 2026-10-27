@@ -22,6 +22,13 @@ Then open http://localhost:8642 in Chrome or Edge (they support Web MIDI) and al
 
 The game tells the listener which notes are due, so the song's notes are recognised reliably. Unexpected notes need stronger evidence, and sounds the game plays itself (the other hand, the bass) are ignored. A mic can only guess when a key is let go, so long held notes are judged a little more loosely.
 
+## Phones and tablets
+
+- **⛶** goes full screen; on Android it also turns the game sideways. iPhones can't make a web page full screen, so add Keystage to the home screen instead (Share → Add to Home Screen) and open it from there.
+- In a game, **⏸** pauses and **✦** starts the Spotlight (double points).
+- Tap the on-screen keys to try it out, or use the microphone with a real piano. iPhones and iPads can't use MIDI keyboards in the browser, so the microphone is the way to play there.
+- `tests/phones.html` shows the game at phone sizes side by side.
+
 ## Publish on GitHub Pages
 
 Push this folder to a GitHub repository, then **Settings → Pages → Deploy from a branch → main / (root)**. GitHub Pages serves over https, which Web MIDI needs.
@@ -52,6 +59,7 @@ Push this folder to a GitHub repository, then **Settings → Pages → Deploy fr
 | `serve.py` | Local test server, plus a `/fetch` proxy so URL imports work locally |
 | `tests/logic.html` | Judging, practice, MIDI, hands, songs, packs, time-stretch |
 | `tests/mic.html` | Microphone note detection on synthesized piano: scales, chords, bass, pedal, noise, wrong octave |
+| `mictest.html` | Microphone check: what the detector hears, recording for tuning, Basic Pitch comparison |
 | `tests/micdevice.html` | The whole microphone path, using Chrome's fake microphone (flags in the file) |
 | `tests/audio.html` | Transcription and beat tracking (`?separate` also runs piano separation) |
 

@@ -55,6 +55,12 @@ let lastConfig = null
 // --- Screens --------------------------------------------------------------------------
 function show(name) {
 	$$(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + name))
+	// In a game (no menu showing), offer pause and the Spotlight for touch screens.
+	const playing = !!(name === "none" && game && !game.finished)
+	document.body.classList.toggle("playing", playing)
+	$("#corner").hidden = !playing && name !== "title"
+	$("#btn-pause").hidden = !playing
+	$("#btn-spot").hidden = !playing || game.mode === "watch"
 }
 $$("[data-goto]").forEach(b => b.addEventListener("click", () => show(b.dataset.goto)))
 
@@ -278,6 +284,7 @@ async function startGame(mode = sel.mode) {
 	renderer.setGame(game)
 	game.start()
 	show("none")
+	if (matchMedia("(pointer: coarse)").matches && innerHeight > innerWidth) toast("Tip: turn your phone sideways for bigger keys.", 4000)
 }
 
 function endGame() {
@@ -289,8 +296,8 @@ function endGame() {
 $("#btn-start").onclick = () => startGame()
 $("#btn-watch").onclick = () => startGame("watch")
 
-window.addEventListener("keydown", e => {
-	if (e.key !== "Escape" || !game || game.finished) return
+function togglePause() {
+	if (!game || game.finished) return
 	if (game.paused) {
 		show("none")
 		game.resume()
@@ -298,7 +305,62 @@ window.addEventListener("keydown", e => {
 		game.pause()
 		show("pause")
 	}
+}
+window.addEventListener("keydown", e => e.key === "Escape" && togglePause())
+$("#btn-pause").onclick = togglePause
+$("#btn-spot").onclick = () => game?.activateOverdrive()
+
+// --- Full screen ----------------------------------------------------------------------------
+let toastTimer = 0
+function toast(html, ms = 6000) {
+	const el = $("#toast")
+	el.innerHTML = html
+	el.hidden = false
+	clearTimeout(toastTimer)
+	toastTimer = setTimeout(() => (el.hidden = true), ms)
+}
+$("#toast").onclick = () => ($("#toast").hidden = true)
+const standalone = () => matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches || navigator.standalone
+if (standalone()) $("#btn-fs").hidden = true
+$("#btn-fs").onclick = async () => {
+	const el = document.documentElement
+	const fsEl = document.fullscreenElement || document.webkitFullscreenElement
+	if (fsEl) return (document.exitFullscreen || document.webkitExitFullscreen).call(document)
+	const req = el.requestFullscreen || el.webkitRequestFullscreen
+	if (!req) {
+		// iPhone Safari has no full-screen mode for pages; a home-screen app does.
+		toast("For full screen on iPhone: tap <b>Share</b> then <b>Add to Home Screen</b>, and open Keystage from there.", 9000)
+		return
+	}
+	try {
+		await req.call(el, { navigationUI: "hide" })
+		// Phones play best sideways; Android allows locking that in full screen.
+		if (matchMedia("(pointer: coarse)").matches) await screen.orientation?.lock?.("landscape").catch(() => {})
+	} catch {
+		toast("Full screen isn't available here. Try your browser's menu, or add Keystage to your home screen.")
+	}
+}
+document.addEventListener("fullscreenchange", () => ($("#btn-fs").textContent = document.fullscreenElement ? "✕" : "⛶"))
+
+// --- Touch the on-screen keys to play ---------------------------------------------------------
+const touches = new Map() // pointerId -> pitch
+$("#stage").addEventListener("pointerdown", e => {
+	const p = renderer.keyAt(e.clientX, e.clientY)
+	if (p === null || !game || game.mode === "watch") return
+	e.preventDefault()
+	audio.ensure()
+	touches.set(e.pointerId, p)
+	if (!settings.echo) audio.piano(audio.now, p, 0.6, 0.7, audio.keys)
+	input.noteOn(p, 0.7, e.timeStamp)
 })
+const lift = e => {
+	const p = touches.get(e.pointerId)
+	if (p === undefined) return
+	touches.delete(e.pointerId)
+	input.noteOff(p, e.timeStamp)
+}
+$("#stage").addEventListener("pointerup", lift)
+$("#stage").addEventListener("pointercancel", lift)
 window.addEventListener("blur", () => {
 	if (game && !game.finished && !game.paused && game.mode === "perform") {
 		game.pause()

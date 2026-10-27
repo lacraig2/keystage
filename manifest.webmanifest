@@ -1,0 +1,17 @@
+{
+	"name": "Keystage",
+	"short_name": "Keystage",
+	"description": "A concert-stage rhythm game for piano: play along on a MIDI keyboard or any piano via microphone.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "fullscreen",
+	"display_override": ["fullscreen", "standalone"],
+	"orientation": "any",
+	"background_color": "#07040d",
+	"theme_color": "#07040d",
+	"icons": [
+		{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+		{ "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+		{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+	]
+}

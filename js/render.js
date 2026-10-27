@@ -129,14 +129,25 @@ export class Renderer {
 		this.kbX = (W - kbW) / 2
 		this.kbW = kbW
 		this.whiteW = kbW / whites.length
-		this.hitY = Math.round(H * 0.8)
-		this.kbH = Math.min(H - this.hitY, this.whiteW * 5.5)
+		// Keyboard along the bottom edge; on tall phone screens it gets less height than it has room for.
+		this.kbH = Math.min(H * 0.2, this.whiteW * 5.5)
+		this.hitY = Math.round(H - this.kbH - H * 0.005)
 		this.farY = H * 0.29
 		const sFar = 1 / (1 + DEPTH)
 		this.vpY = (this.farY - sFar * this.hitY) / (1 - sFar)
 		this.cx = W / 2
 		this.whiteIdx = {}
 		whites.forEach((p, i) => (this.whiteIdx[p] = i))
+	}
+
+	// The piano key under a screen point, for playing by touch.
+	keyAt(x, y) {
+		if (!this.game || y < this.hitY || y > this.hitY + this.kbH) return null
+		if (y < this.hitY + this.kbH * 0.62) {
+			for (let p = this.lo; p <= this.hi; p++) if (isBlack(p) && Math.abs(x - this.keyX(p)) < this.keyW(p) / 2) return p
+		}
+		const i = Math.floor((x - this.kbX) / this.whiteW)
+		return i >= 0 && i < this.whites.length ? this.whites[i] : null
 	}
 
 	keyX(p) {
@@ -876,7 +887,8 @@ export class Renderer {
 	drawHUD(g, time, dt, pulse) {
 		const ctx = this.ctx
 		const { W, H } = this
-		const u = Math.min(W / 1400, H / 900) * 1.1
+		// Scale with the screen, but never so small that phones can't read it.
+		const u = Math.max(0.7, Math.min(W / 1400, H / 900) * 1.1)
 		const now = this.now()
 
 		// progress bar
@@ -895,7 +907,7 @@ export class Renderer {
 		ctx.fillStyle = "rgba(255,255,255,0.45)"
 		ctx.font = `600 ${13 * u}px Segoe UI, sans-serif`
 		const modeLabel = { perform: "PERFORM", practice: "PRACTICE", watch: "WATCHING" }[g.mode]
-		ctx.fillText(`${modeLabel} · ${Math.round(g.speed * 100)}% speed · Esc to pause`, 18 * u, 40 * u)
+		ctx.fillText(`${modeLabel} · ${Math.round(g.speed * 100)}% speed${matchMedia("(pointer: coarse)").matches ? "" : " · Esc to pause"}`, 18 * u, 40 * u)
 
 		if (g.mode !== "watch") {
 			// score

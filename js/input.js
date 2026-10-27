@@ -120,7 +120,8 @@ export class Input {
 
 	async initMidi() {
 		if (!navigator.requestMIDIAccess) {
-			this.midiError = "This browser has no Web MIDI. Use Chrome or Edge."
+			const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+			this.midiError = apple ? "iPhones and iPads can't use MIDI keyboards in the browser. Use the microphone instead!" : "This browser has no Web MIDI. Use Chrome or Edge, or the microphone."
 			this.emit("devices", [])
 			return
 		}

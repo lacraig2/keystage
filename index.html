@@ -2,12 +2,29 @@
 <html lang="en">
 <head>
 	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 	<title>Keystage</title>
+	<meta name="description" content="A concert-stage rhythm game for piano: play along on a MIDI keyboard or any piano via microphone." />
+	<meta name="theme-color" content="#07040d" />
+	<link rel="manifest" href="manifest.webmanifest" />
+	<link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+	<link rel="apple-touch-icon" href="icons/icon-180.png" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<meta name="apple-mobile-web-app-title" content="Keystage" />
 	<link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
 	<canvas id="stage"></canvas>
+
+	<!-- Always-there corner controls (pause shows only in a game) -->
+	<div id="corner" class="corner">
+		<button id="btn-pause" class="round" title="Pause" hidden>⏸</button>
+		<button id="btn-spot" class="round" title="Spotlight: double points (or press the sustain pedal)" hidden>✦</button>
+		<button id="btn-fs" class="round" title="Full screen">⛶</button>
+	</div>
+	<div id="toast" class="toast" hidden></div>
 
 	<!-- Title -->
 	<section id="screen-title" class="screen active">
@@ -26,7 +43,7 @@
 				<button id="btn-calibrate" class="btn">Calibrate</button>
 				<button id="btn-settings" class="btn">Settings</button>
 			</div>
-			<p class="hint">The microphone works with any acoustic or digital piano: put the computer near it, play a few notes, and check they show up here.<br />No piano? Use your computer keyboard: <kbd>A W S E D F T G Y H U J K</kbd> = C to C, <kbd>Z</kbd>/<kbd>X</kbd> shift octave, <kbd>Space</kbd> = Spotlight.</p>
+			<p class="hint">The microphone works with any acoustic or digital piano: put the computer near it, play a few notes, and check they show up here.<br /><span class="touch-only">On a phone or tablet, tap the keys on screen to try it out.</span><span class="no-touch">No piano? Use your computer keyboard: <kbd>A W S E D F T G Y H U J K</kbd> = C to C, <kbd>Z</kbd>/<kbd>X</kbd> shift octave, <kbd>Space</kbd> = Spotlight.</span></p>
 		</div>
 	</section>
 
