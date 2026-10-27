@@ -273,3 +273,4 @@ a.pick { text-decoration: none; color: inherit; }
 .mic-meter > div { height: 100%; width: 0; background: linear-gradient(90deg, #7dffb0, var(--gold)); transition: width 0.05s linear; }
 .mic-heard { color: #7dffb0; font-size: 14px; min-width: 6em; text-align: left; font-variant-numeric: tabular-nums; }
 .mic-heard:empty { display: none; }
+.mic-check { color: var(--muted); font-size: 13px; }

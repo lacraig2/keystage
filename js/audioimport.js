@@ -85,14 +85,14 @@ function separatePiano(channels, onProgress, signal) {
 
 // --- Transcription (Basic Pitch) ---------------------------------------------------------------
 let bp = null
-async function transcribe([L, R], onProgress) {
+export async function transcribe([L, R], onProgress = () => {}, sr = SR) {
 	const lib = await import(`${BASIC_PITCH}/+esm`)
 	bp ??= new lib.BasicPitch(`${BASIC_PITCH}/model/model.json`)
 
 	// Basic Pitch wants mono at 22050 Hz.
-	const len = Math.ceil((L.length * 22050) / SR)
+	const len = Math.ceil((L.length * 22050) / sr)
 	const oc = new OfflineAudioContext(1, len, 22050)
-	const src = oc.createBuffer(2, L.length, SR)
+	const src = oc.createBuffer(2, L.length, sr)
 	src.copyToChannel(L, 0)
 	src.copyToChannel(R, 1)
 	const node = oc.createBufferSource()

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Keystage Mic Check</title>
+	<link rel="stylesheet" href="css/style.css" />
+	<style>
+		body { overflow: auto; }
+		.mt { max-width: 860px; margin: 0 auto; padding: 24px 16px 60px; }
+		.mt .panel { position: static; transform: none; margin: 0 0 16px; max-width: none; width: auto; }
+		.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+		@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+		.log { background: rgba(0, 0, 0, 0.35); border: 1px solid var(--edge); border-radius: 10px; padding: 10px; height: 260px; overflow: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+		.big-notes { font-size: 40px; font-weight: 800; min-height: 56px; color: #7dffb0; letter-spacing: 0.04em; }
+		ol.steps { text-align: left; line-height: 1.7; }
+		label.inline { display: inline-flex; gap: 8px; align-items: center; margin: 8px 0; }
+	</style>
+</head>
+<body>
+	<div class="mt">
+		<div class="panel">
+			<h2>Microphone check</h2>
+			<p>See what Keystage hears from your piano, and record a sample so the note detection can be tuned to real pianos. Nothing is uploaded: recordings save to your computer.</p>
+			<ol class="steps">
+				<li>Put the computer where you'd play the game. Use headphones if you have them.</li>
+				<li>Press <b>Start microphone</b>, then <b>Record</b>.</li>
+				<li>Play slowly, one note at a time: <b>C D E F G A B C</b> from middle C, then <b>C E G</b> together, then a low <b>C</b> with your left hand, then a bit of any song.</li>
+				<li>Press <b>Stop</b>, then <b>Save recording</b>. Send the two files back for tuning.</li>
+			</ol>
+			<label class="inline"><input type="checkbox" id="echo" /> Filter out computer sound (echo cancellation)</label>
+			<div class="mic-row">
+				<button id="mic" class="btn primary">Start microphone</button>
+				<button id="rec" class="btn" disabled>Record</button>
+				<button id="save" class="btn" disabled>Save recording</button>
+				<button id="compare" class="btn" disabled>Compare with Basic Pitch</button>
+				<div id="meter" class="mic-meter"><div></div></div>
+			</div>
+			<p id="status" class="hint"></p>
+			<div id="now" class="big-notes"></div>
+		</div>
+		<div class="cols">
+			<div class="panel">
+				<h3>Live detector (what the game uses)</h3>
+				<div id="live" class="log"></div>
+			</div>
+			<div class="panel">
+				<h3>Basic Pitch (neural network, on the recording)</h3>
+				<div id="bp" class="log">Record something, then press Compare.</div>
+			</div>
+		</div>
+		<p class="hint"><a href="./">← Back to Keystage</a></p>
+	</div>
+	<script type="module">
+		import { Input } from "./js/input.js"
+		import { toWav, transcribe } from "./js/audioimport.js"
+
+		const $ = s => document.querySelector(s)
+		const NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
+		const name = p => NAMES[p % 12] + (Math.floor(p / 12) - 1)
+		let settings = {}
+		try {
+			settings = JSON.parse(localStorage.getItem("keystage.settings") || "{}")
+		} catch {}
+		$("#echo").checked = settings.micEcho ?? false
+
+		const input = new Input()
+		let t0 = performance.now()
+		let rec = null // { chunks: [], start, events: [] }
+		let last = { L: null, events: [], sr: 48000 }
+		const lines = []
+		const sounding = new Set()
+
+		input.listen("mic", level => ($("#meter > div").style.width = Math.round(level * 100) + "%"))
+		input.listen("on", (p, v, ts) => {
+			const t = ((ts - (rec?.start ?? t0)) / 1000).toFixed(2)
+			lines.push(`${t.padStart(7)} s  ${name(p).padEnd(4)} on   vel ${v.toFixed(2)}`)
+			rec?.events.push({ type: "on", p, vel: +v.toFixed(3), t: +t })
+			sounding.add(p)
+			show()
+		})
+		input.listen("off", (p, ts) => {
+			const t = ((ts - (rec?.start ?? t0)) / 1000).toFixed(2)
+			rec?.events.push({ type: "off", p, t: +t })
+			sounding.delete(p)
+			show()
+		})
+		input.listen("audio", samples => rec?.chunks.push(samples.slice()))
+		function show() {
+			$("#live").textContent = lines.slice(-200).join("\n")
+			$("#live").scrollTop = 1e9
+			$("#now").textContent = [...sounding].sort((a, b) => a - b).map(name).join(" ")
+		}
+
+		$("#mic").onclick = async () => {
+			if (input.micOn) {
+				input.disableMic()
+				$("#mic").textContent = "Start microphone"
+				$("#rec").disabled = true
+				return
+			}
+			try {
+				await input.enableMic({ cancelEcho: $("#echo").checked })
+				t0 = performance.now()
+				$("#mic").textContent = "Stop microphone"
+				$("#rec").disabled = false
+				$("#status").textContent = `Listening at ${input.mic.sampleRate} Hz. Play a note.`
+			} catch (e) {
+				$("#status").textContent = "Couldn't start the microphone: " + e.message
+			}
+		}
+
+		$("#rec").onclick = () => {
+			if (rec) {
+				const n = rec.chunks.reduce((a, c) => a + c.length, 0)
+				const L = new Float32Array(n)
+				let o = 0
+				for (const c of rec.chunks) L.set(c, o), (o += c.length)
+				last = { L, events: rec.events, sr: input.mic?.sampleRate || 48000 }
+				rec = null
+				$("#rec").textContent = "Record"
+				$("#save").disabled = $("#compare").disabled = false
+				$("#status").textContent = `Recorded ${(L.length / last.sr).toFixed(1)} s.`
+				return
+			}
+			rec = { chunks: [], start: performance.now(), events: [] }
+			lines.length = 0
+			show()
+			$("#rec").textContent = "Stop"
+			$("#status").textContent = "Recording… play slowly."
+		}
+
+		$("#save").onclick = () => {
+			const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")
+			const dl = (blob, fname) => {
+				const a = document.createElement("a")
+				a.href = URL.createObjectURL(blob)
+				a.download = fname
+				a.click()
+				setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+			}
+			dl(toWav([last.L], last.sr), `keystage-mic-${stamp}.wav`)
+			const info = { sampleRate: last.sr, echoCancellation: $("#echo").checked, userAgent: navigator.userAgent, detected: last.events }
+			dl(new Blob([JSON.stringify(info, null, 1)], { type: "application/json" }), `keystage-mic-${stamp}.json`)
+		}
+
+		$("#compare").onclick = async () => {
+			$("#compare").disabled = true
+			$("#bp").textContent = "Loading Basic Pitch (first time downloads a few MB)…"
+			try {
+				const notes = await transcribe([last.L, last.L], p => ($("#bp").textContent = `Listening… ${Math.round(p * 100)}%`), last.sr)
+				$("#bp").textContent = notes.length ? notes.map(n => `${n.t.toFixed(2).padStart(7)} s  ${name(n.p).padEnd(4)} for ${n.d.toFixed(2)} s`).join("\n") : "Basic Pitch heard no notes."
+			} catch (e) {
+				$("#bp").textContent = "Basic Pitch failed: " + e.message
+			}
+			$("#compare").disabled = false
+		}
+
+		// ?auto: headless self-test (start, record 8 s, compare) for development
+		if (new URLSearchParams(location.search).has("auto")) {
+			await $("#mic").onclick()
+			$("#rec").onclick()
+			await new Promise(r => setTimeout(r, 8000))
+			$("#rec").onclick()
+			await $("#compare").onclick()
+			fetch("/__result?" + encodeURIComponent("LIVE " + last.events.filter(e => e.type === "on").map(e => name(e.p) + "@" + e.t).join(" ") + " || BP " + $("#bp").textContent.replace(/\s+/g, " ").slice(0, 600))).catch(() => {})
+		}
+	</script>
+</body>
+</html>

@@ -7,7 +7,7 @@ const KEYMAP = { a: 0, w: 1, s: 2, e: 3, d: 4, f: 5, t: 6, g: 7, y: 8, h: 9, u: 
 
 export class Input {
 	constructor() {
-		this.handlers = { on: [], off: [], pedal: [], devices: [], mic: [] }
+		this.handlers = { on: [], off: [], pedal: [], devices: [], mic: [], audio: [] }
 		this.held = new Set()
 		this.devices = []
 		this.octave = 4
@@ -87,8 +87,9 @@ export class Input {
 				else this.noteOff(ev.p, ev.ts, true)
 			}
 			this.emit("mic", listener.level)
+			if (this.handlers.audio.length) this.emit("audio", samples, ts)
 		}
-		this.mic = { stream, src, node, sink, listener }
+		this.mic = { stream, src, node, sink, listener, sampleRate: ctx.sampleRate }
 		this.emit("devices", this.devices)
 	}
 
